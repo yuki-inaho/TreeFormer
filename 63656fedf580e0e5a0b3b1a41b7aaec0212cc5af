@@ -1,0 +1,14 @@
+Technical Details:
+- Dependencies: opencv-python 4.12.0, numpy 1.24.4 (< 2.0 constraint)
+- Python version: 3.10.6 (managed via pyenv)
+- Package manager: uv (modern Python package installer)
+- Code style: DRY/KISS principles
+
+Tested with:
+- Set00_IMG_3283.jpeg: 115 nodes, 114 edges (feature-type mode)
+- Set00_IMG_3284.jpeg: 159 nodes, 158 edges (branch-label mode)
+- Set00_IMG_3285.jpeg: 146 nodes, 145 edges (resize mode, max-height=800)
+
+Color Schemes:
+Feature Types: rootCrown(red), branchNode(blue), pruningCut(green), branchToPhotoEdge(yellow), growingTip(magenta)
+Branch Labels: root, mainTrunk, oldWood, courson, cane, shoot, lateralShoot (7 distinct colors)
