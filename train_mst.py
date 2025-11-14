@@ -763,9 +763,14 @@ def main(args):
     os.environ["CUDA_VISIBLE_DEVICES"] = ','.join(map(str, args.cuda_visible_device))
     local_rank = args.local_rank
     # dist.init_process_group(backend='gloo') # windows
-    dist.init_process_group(backend='nccl')
-    torch.cuda.set_device(args.local_rank)
-    device = torch.device("cuda", local_rank)
+    # Use gloo backend if CUDA is not available, otherwise use nccl
+    backend = 'gloo' if not torch.cuda.is_available() else 'nccl'
+    dist.init_process_group(backend=backend)
+    if torch.cuda.is_available():
+        torch.cuda.set_device(args.local_rank)
+        device = torch.device("cuda", local_rank)
+    else:
+        device = torch.device("cpu")
 
     # import logging
     # from monai.data import DataLoader
@@ -804,6 +809,14 @@ def main(args):
     import time
     from metric_smd import StreetMoverDistance
     from monai.utils import MetricReduction
+
+    # Import GuyotDataset for Guyot grapevine dataset
+    try:
+        from guyot_dataset import GuyotDataset
+        GUYOT_AVAILABLE = True
+    except ImportError:
+        GUYOT_AVAILABLE = False
+        print("Warning: GuyotDataset not available, using LoadCNNDataset")
 
     # torch.backends.cudnn.benchmark = True
     # torch.backends.cudnn.enabled = True
@@ -853,20 +866,44 @@ def main(args):
     # val_path = "/sqfs2/cmc/1/work/G15538/u6c043/data/dataset/new_8_new/val_aug"
     # val_path = "/sqfs2/cmc/1/work/G15538/u6c043/data/dataset/move_data/val_aug"
 
-    train_path = "/sqfs2/cmc/1/work/G15538/u6c043/data/dataset/all_same_PAF_move/train_aug"
-    val_path = "/sqfs2/cmc/1/work/G15538/u6c043/data/dataset/all_same_PAF_move/val_aug"
+    # Check dataset type from config
+    if hasattr(config.DATA, 'DATASET') and 'guyot' in config.DATA.DATASET.lower() and GUYOT_AVAILABLE:
+        # Use GuyotDataset for Guyot grapevine dataset
+        print(f"Using GuyotDataset with path: {config.DATA.DATA_PATH}")
+        dataset_train = GuyotDataset(
+            parent_path=config.DATA.DATA_PATH,
+            split='train',
+            target_size=tuple(config.DATA.IMG_SIZE)
+        )
+        dataset_val = GuyotDataset(
+            parent_path=config.DATA.DATA_PATH,
+            split='test',  # Use test set as validation for Guyot
+            target_size=tuple(config.DATA.IMG_SIZE)
+        )
 
-    # dataset_train = LoadCNNDataset(tgt_data_path=tgt_train_dataset_path, feature_path_1=img_train_dataset_path1,
-    #                                feature_path_2=img_train_dataset_path2, tgt_detr_dataset_name="DETR_all_",
-    #                                tgt_gnn_dataset_name="GNN_simple_")
-    # dataset_test = LoadCNNDataset(tgt_data_path=tgt_test_dataset_path, feature_path_1=img_test_dataset_path1,
-    #                               feature_path_2=img_test_dataset_path2)
-    # dataset_val = LoadCNNDataset(tgt_data_path=tgt_val_dataset_path, feature_path_1=img_val_dataset_path1,
-    #                              feature_path_2=img_val_dataset_path2, tgt_detr_dataset_name="DETR_all_",
-    #                              tgt_gnn_dataset_name="GNN_simple_")
+        # Define custom collate function for Guyot dataset
+        def guyot_collate_fn(batch):
+            """Custom collate for variable-length nodes/edges"""
+            images = torch.stack([sample['image'] for sample in batch], dim=0)
+            nodes = [sample['nodes'] for sample in batch]
+            edges = [sample['edges'] for sample in batch]
+            filenames = [sample['filename'] for sample in batch]
+            return {
+                'image': images,
+                'nodes': nodes,
+                'edges': edges,
+                'filename': filenames
+            }
 
-    dataset_train = LoadCNNDataset(parent_path=train_path, max_size=config.DATA.MAX_SIZE, max_change_light_rate=0.3, is_train=False, is_rotate=True)
-    dataset_val = LoadCNNDataset(parent_path=val_path, max_size=config.DATA.MAX_SIZE, max_change_light_rate=0.3, is_train=False, is_rotate=False)
+        # Override custom_collate_fn for Guyot dataset
+        custom_collate_fn = guyot_collate_fn
+    else:
+        # Use original LoadCNNDataset
+        train_path = "/sqfs2/cmc/1/work/G15538/u6c043/data/dataset/all_same_PAF_move/train_aug"
+        val_path = "/sqfs2/cmc/1/work/G15538/u6c043/data/dataset/all_same_PAF_move/val_aug"
+
+        dataset_train = LoadCNNDataset(parent_path=train_path, max_size=config.DATA.MAX_SIZE, max_change_light_rate=0.3, is_train=False, is_rotate=True)
+        dataset_val = LoadCNNDataset(parent_path=val_path, max_size=config.DATA.MAX_SIZE, max_change_light_rate=0.3, is_train=False, is_rotate=False)
 
     # train_indices = list(range(len(dataset_train)))
     # random.shuffle(train_indices)

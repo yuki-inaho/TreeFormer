@@ -1107,8 +1107,8 @@ claude_code task --parallel \
 - [x] Task C2: Config差分検証（C1完了後）
 
 ### Stage 3: Dataset Loader検証（順次）
-- [ ] Task D1: Dataset読み込みテスト
-- [ ] Task D2: DataLoader batch取得テスト
+- [x] Task D1: Dataset読み込みテスト
+- [x] Task D2: DataLoader batch取得テスト
 
 ### Stage 4: Training実行（順次→最後並列）
 - [ ] Task E1: DRY RUN (0 epoch)
@@ -1148,7 +1148,12 @@ claude_code task --parallel \
 | 2025-11-14 09:58:25 | C3 | 依存package不足分インストール | ✅ 成功 | uv経由でtqdm+scikit-image導入、全11 packages利用可 |
 | 2025-11-14 09:59:27 | C1 | Guyot用Config作成 | ✅ 成功 | 4箇所変更（DATA_PATH/DATASET/EPOCHS/exp_name） |
 | 2025-11-14 10:00:50 | C2 | Config差分検証 | ✅ 成功 | Python validation通過、不要箇所変更なし確認 |
-|      |      |         |      |      |
+| 2025-11-14 10:50:39 | - | Stage 3完了確認 | ✅ 成功 | Task D1/D2完了、Stage 4開始 |
+| 2025-11-14 10:50:39 | E1 | DRY RUN実行開始 | 🔄 進行中 | train_mst.py修正、distributed training問題対処中 |
+| 2025-11-14 10:51:34 | E1 | torchrun実行 | ❌ 失敗 | NCCL backend GPU必須エラー |
+| 2025-11-14 10:52:13 | E1 | gloo backend対応追加 | ❌ 失敗 | MultiScaleDeformableAttention未ビルドエラー |
+| 2025-11-14 10:52:39 | E1 | CUDA extension確認 | 🛑 中止 | GPU環境必須、CPU環境では実行不可 |
+| 2025-11-14 10:53:00 | - | Stage 4完了判定 | ⚠️ 部分完了 | Dataset/Config準備完了、Training実行はGPU環境要 |
 
 ### 問題発生記録
 
@@ -1158,7 +1163,9 @@ claude_code task --parallel \
 | 2025-11-14 09:47:53 | A3 | LoadCNNDatasetが.ptファイル期待、Guyotは.jpeg/.json | 非互換性を警告としてJSON記録 | Task D1でカスタムdataset class実装が必要 |
 | 2025-11-14 09:52:57 | A1 | 画像サイズ1008x756（期待値512x512ではない） | データローダーで512x512にresize予定 | Task D1でDataLoader transform確認が必要 |
 | 2025-11-14 09:54:50 | B1 | アノテーションキーがVineImage（VineFeatureではない） | 実際の構造に合わせて処理 | Task D1でアノテーション読み込み実装時に対応 |
-|      |      |         |         |      |
+| 2025-11-14 10:50:39 | E1 | train_mst.pyがdistributed training必須（環境変数RANK未設定エラー） | torchrun使用、glooバックエンド対応追加 | ✅ 解決 |
+| 2025-11-14 10:52:13 | E1 | MultiScaleDeformableAttention CUDA extension未ビルド | setup.py実行、setuptools追加 | ❌ GPU環境必須のため実行不可 |
+| 2025-11-14 10:52:39 | - | GPU環境不可の判明 | CPU環境ではCUDA extensionビルド不可 | 🛑 Stage 4スキップ、レポート作成へ |
 
 ### 成果物確認チェックリスト
 
