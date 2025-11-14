@@ -1253,10 +1253,9 @@ def test(is_use_mst, args):
     from models import build_model
 
     if is_use_mst:
-        # from inference_infinity_mst_nx_dist import relation_infer
-        from inference_infinity_mst_nx_gradmst import relation_infer
+        from epoch import relation_infer_mst as relation_infer
     else:
-        from inference_infinity_gradmst import relation_infer
+        from epoch import relation_infer
 
     from metric_smd import StreetMoverDistance
     from metric_map import BBoxEvaluator
