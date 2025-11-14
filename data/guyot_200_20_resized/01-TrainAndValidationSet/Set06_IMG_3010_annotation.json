@@ -1,0 +1,1336 @@
+{
+  "Title": "3D2Cut Grapevine Annotation",
+  "VineImage": [
+    {
+      "ImageFileName": "IMG_3010.jpeg",
+      "AnnotationVersion": "1.0.0",
+      "AnnotationCoordinateSystem": "TopLeft",
+      "VineInfo": {
+        "VineCountry": "France",
+        "VineRegion": "Bordeaux",
+        "VineVariety": ""
+      },
+      "ImageBackground": {
+        "BackgroundType": "artificialSheet",
+        "BackgroundSheetColour": "blue"
+      },
+      "VineFeature": [
+        [
+          {
+            "FeatureID": 0,
+            "FeatureType": "rootCrown",
+            "FeatureCoordinates": [
+              449.25,
+              722.25
+            ],
+            "ParentID": null,
+            "BranchLabel": "root",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 1,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              449.0,
+              686.0
+            ],
+            "ParentID": 0,
+            "BranchLabel": "mainTrunk",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 2,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              456.75,
+              660.75
+            ],
+            "ParentID": 1,
+            "BranchLabel": "mainTrunk",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 3,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              456.75,
+              622.75
+            ],
+            "ParentID": 2,
+            "BranchLabel": "mainTrunk",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 4,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              445.75,
+              585.75
+            ],
+            "ParentID": 3,
+            "BranchLabel": "mainTrunk",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 5,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              434.75,
+              563.5
+            ],
+            "ParentID": 4,
+            "BranchLabel": "mainTrunk",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 6,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              436.75,
+              556.25
+            ],
+            "ParentID": 5,
+            "BranchLabel": "oldWood",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 7,
+            "FeatureType": "pruningCut",
+            "FeatureCoordinates": [
+              429.0,
+              555.0
+            ],
+            "ParentID": 6,
+            "BranchLabel": "oldWood",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 8,
+            "FeatureType": "pruningCut",
+            "FeatureCoordinates": [
+              441.75,
+              547.5
+            ],
+            "ParentID": 6,
+            "BranchLabel": "oldWood",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 9,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              408.5,
+              583.25
+            ],
+            "ParentID": 4,
+            "BranchLabel": "courson",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 10,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              395.5,
+              584.25
+            ],
+            "ParentID": 9,
+            "BranchLabel": "courson",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 11,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              373.25,
+              576.5
+            ],
+            "ParentID": 10,
+            "BranchLabel": "courson",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 12,
+            "FeatureType": "pruningCut",
+            "FeatureCoordinates": [
+              358.0,
+              569.5
+            ],
+            "ParentID": 11,
+            "BranchLabel": "courson",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 13,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              418.25,
+              535.75
+            ],
+            "ParentID": 5,
+            "BranchLabel": "mainTrunk",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 14,
+            "FeatureType": "pruningCut",
+            "FeatureCoordinates": [
+              432.5,
+              528.5
+            ],
+            "ParentID": 13,
+            "BranchLabel": "oldWood",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 15,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              432.0,
+              491.75
+            ],
+            "ParentID": 13,
+            "BranchLabel": "mainTrunk",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 16,
+            "FeatureType": "pruningCut",
+            "FeatureCoordinates": [
+              458.5,
+              478.0
+            ],
+            "ParentID": 15,
+            "BranchLabel": "oldWood",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 17,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              413.75,
+              458.25
+            ],
+            "ParentID": 15,
+            "BranchLabel": "mainTrunk",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 18,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              405.0,
+              421.5
+            ],
+            "ParentID": 17,
+            "BranchLabel": "mainTrunk",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 19,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              439.0,
+              395.5
+            ],
+            "ParentID": 18,
+            "BranchLabel": "mainTrunk",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 20,
+            "FeatureType": "pruningCut",
+            "FeatureCoordinates": [
+              469.5,
+              388.25
+            ],
+            "ParentID": 19,
+            "BranchLabel": "mainTrunk",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 21,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              448.0,
+              403.75
+            ],
+            "ParentID": 19,
+            "BranchLabel": "cane",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 22,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              462.25,
+              410.75
+            ],
+            "ParentID": 21,
+            "BranchLabel": "cane",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 23,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              490.5,
+              422.5
+            ],
+            "ParentID": 22,
+            "BranchLabel": "cane",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 24,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              548.75,
+              427.75
+            ],
+            "ParentID": 23,
+            "BranchLabel": "cane",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 25,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              623.25,
+              430.5
+            ],
+            "ParentID": 24,
+            "BranchLabel": "cane",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 26,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              695.75,
+              431.0
+            ],
+            "ParentID": 25,
+            "BranchLabel": "cane",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 27,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              783.0,
+              436.25
+            ],
+            "ParentID": 26,
+            "BranchLabel": "cane",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 28,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              859.0,
+              436.5
+            ],
+            "ParentID": 27,
+            "BranchLabel": "cane",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 29,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              903.0,
+              457.25
+            ],
+            "ParentID": 28,
+            "BranchLabel": "cane",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 30,
+            "FeatureType": "pruningCut",
+            "FeatureCoordinates": [
+              913.25,
+              460.0
+            ],
+            "ParentID": 29,
+            "BranchLabel": "cane",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 31,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              878.75,
+              435.0
+            ],
+            "ParentID": 28,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 32,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              902.5,
+              432.5
+            ],
+            "ParentID": 31,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 33,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              952.0,
+              416.25
+            ],
+            "ParentID": 32,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 34,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              994.25,
+              386.75
+            ],
+            "ParentID": 33,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 35,
+            "FeatureType": "branchToPhotoEdge",
+            "FeatureCoordinates": [
+              1007.75,
+              369.75
+            ],
+            "ParentID": 34,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 36,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              798.5,
+              437.5
+            ],
+            "ParentID": 27,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 37,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              820.75,
+              425.0
+            ],
+            "ParentID": 36,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 38,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              860.0,
+              393.0
+            ],
+            "ParentID": 37,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 39,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              894.0,
+              348.0
+            ],
+            "ParentID": 38,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 40,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              928.5,
+              304.75
+            ],
+            "ParentID": 39,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 41,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              962.0,
+              234.5
+            ],
+            "ParentID": 40,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 42,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              994.0,
+              172.25
+            ],
+            "ParentID": 41,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 43,
+            "FeatureType": "branchToPhotoEdge",
+            "FeatureCoordinates": [
+              1007.75,
+              121.0
+            ],
+            "ParentID": 42,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 44,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              710.5,
+              428.5
+            ],
+            "ParentID": 26,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 45,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              739.25,
+              409.25
+            ],
+            "ParentID": 44,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 46,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              745.25,
+              374.0
+            ],
+            "ParentID": 45,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 47,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              746.75,
+              329.75
+            ],
+            "ParentID": 46,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 48,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              745.5,
+              293.5
+            ],
+            "ParentID": 47,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 49,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              747.25,
+              245.5
+            ],
+            "ParentID": 48,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 50,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              751.0,
+              210.0
+            ],
+            "ParentID": 49,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 51,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              753.0,
+              175.0
+            ],
+            "ParentID": 50,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 52,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              767.75,
+              132.25
+            ],
+            "ParentID": 51,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 53,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              782.25,
+              87.75
+            ],
+            "ParentID": 52,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 54,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              803.25,
+              43.5
+            ],
+            "ParentID": 53,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 55,
+            "FeatureType": "branchToPhotoEdge",
+            "FeatureCoordinates": [
+              821.25,
+              0.0
+            ],
+            "ParentID": 54,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 56,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              560.0,
+              424.0
+            ],
+            "ParentID": 24,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 57,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              563.0,
+              403.75
+            ],
+            "ParentID": 56,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 58,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              555.25,
+              361.5
+            ],
+            "ParentID": 57,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 59,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              537.75,
+              312.0
+            ],
+            "ParentID": 58,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 60,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              531.75,
+              258.0
+            ],
+            "ParentID": 59,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 61,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              510.5,
+              190.5
+            ],
+            "ParentID": 60,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 62,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              505.5,
+              135.0
+            ],
+            "ParentID": 61,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 63,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              488.5,
+              85.5
+            ],
+            "ParentID": 62,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 64,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              487.0,
+              15.5
+            ],
+            "ParentID": 63,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 65,
+            "FeatureType": "branchToPhotoEdge",
+            "FeatureCoordinates": [
+              484.0,
+              0.0
+            ],
+            "ParentID": 64,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 66,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              473.0,
+              401.25
+            ],
+            "ParentID": 22,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 67,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              481.75,
+              375.25
+            ],
+            "ParentID": 66,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 68,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              488.25,
+              324.0
+            ],
+            "ParentID": 67,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 69,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              493.5,
+              261.25
+            ],
+            "ParentID": 68,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 70,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              479.0,
+              202.25
+            ],
+            "ParentID": 69,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 71,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              478.75,
+              137.0
+            ],
+            "ParentID": 70,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 72,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              464.25,
+              77.0
+            ],
+            "ParentID": 71,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 73,
+            "FeatureType": "branchToPhotoEdge",
+            "FeatureCoordinates": [
+              460.75,
+              0.0
+            ],
+            "ParentID": 72,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 74,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              437.5,
+              417.5
+            ],
+            "ParentID": 21,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 75,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              421.75,
+              417.25
+            ],
+            "ParentID": 74,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 76,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              387.25,
+              394.0
+            ],
+            "ParentID": 75,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 77,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              337.0,
+              341.25
+            ],
+            "ParentID": 76,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 78,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              322.75,
+              276.75
+            ],
+            "ParentID": 77,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 79,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              308.0,
+              222.25
+            ],
+            "ParentID": 78,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 80,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              307.75,
+              162.25
+            ],
+            "ParentID": 79,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 81,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              304.75,
+              108.25
+            ],
+            "ParentID": 80,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 82,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              300.75,
+              37.5
+            ],
+            "ParentID": 81,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 83,
+            "FeatureType": "branchToPhotoEdge",
+            "FeatureCoordinates": [
+              291.0,
+              0.0
+            ],
+            "ParentID": 82,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 84,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              364.25,
+              562.5
+            ],
+            "ParentID": 11,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 85,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              345.0,
+              556.0
+            ],
+            "ParentID": 84,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 86,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              319.0,
+              536.25
+            ],
+            "ParentID": 85,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 87,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              279.75,
+              499.0
+            ],
+            "ParentID": 86,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 88,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              204.25,
+              424.75
+            ],
+            "ParentID": 87,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 89,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              128.75,
+              330.25
+            ],
+            "ParentID": 88,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 90,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              97.0,
+              227.5
+            ],
+            "ParentID": 89,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 91,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              64.75,
+              105.75
+            ],
+            "ParentID": 90,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 92,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              83.5,
+              5.5
+            ],
+            "ParentID": 91,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 93,
+            "FeatureType": "branchToPhotoEdge",
+            "FeatureCoordinates": [
+              84.5,
+              0.0
+            ],
+            "ParentID": 92,
+            "BranchLabel": "shoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 94,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              495.5,
+              120.25
+            ],
+            "ParentID": 71,
+            "BranchLabel": "lateralShoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 95,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              507.0,
+              99.0
+            ],
+            "ParentID": 94,
+            "BranchLabel": "lateralShoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 96,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              505.75,
+              90.0
+            ],
+            "ParentID": 95,
+            "BranchLabel": "lateralShoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 97,
+            "FeatureType": "growingTip",
+            "FeatureCoordinates": [
+              514.25,
+              71.25
+            ],
+            "ParentID": 96,
+            "BranchLabel": "lateralShoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 98,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              444.5,
+              48.25
+            ],
+            "ParentID": 72,
+            "BranchLabel": "lateralShoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 99,
+            "FeatureType": "branchNode",
+            "FeatureCoordinates": [
+              429.75,
+              1.0
+            ],
+            "ParentID": 98,
+            "BranchLabel": "lateralShoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          },
+          {
+            "FeatureID": 100,
+            "FeatureType": "branchToPhotoEdge",
+            "FeatureCoordinates": [
+              428.5,
+              0.0
+            ],
+            "ParentID": 99,
+            "BranchLabel": "lateralShoot",
+            "Annotator": "Adam",
+            "AnnotationTool": "semi auto",
+            "AnnotationDate": "2021-03-29T12:52:20.452722UTC"
+          }
+        ]
+      ]
+    }
+  ]
+}
