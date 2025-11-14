@@ -79,7 +79,7 @@ def resize_annotation(annotation_path: Path, output_path: Path, scale: float) ->
 
 def process_dataset(input_dir: Path, output_dir: Path, scale: float) -> Dict[str, int]:
     """
-    Process all images and annotations in a directory.
+    Process all images and annotations in a directory recursively.
 
     Args:
         input_dir: Input directory containing images and annotations
@@ -91,21 +91,25 @@ def process_dataset(input_dir: Path, output_dir: Path, scale: float) -> Dict[str
     """
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    image_files = sorted(input_dir.glob('*.jpeg'))
+    image_files = sorted(input_dir.glob('**/*.jpeg'))
     processed_images = 0
     processed_annotations = 0
 
     for image_path in image_files:
         image_name = image_path.name
         annotation_name = image_path.stem + '_annotation.json'
-        annotation_path = input_dir / annotation_name
+        annotation_path = image_path.parent / annotation_name
 
         if not annotation_path.exists():
             print(f"Warning: No annotation found for {image_name}, skipping")
             continue
 
-        output_image_path = output_dir / image_name
-        output_annotation_path = output_dir / annotation_name
+        relative_path = image_path.parent.relative_to(input_dir)
+        output_subdir = output_dir / relative_path
+        output_subdir.mkdir(parents=True, exist_ok=True)
+
+        output_image_path = output_subdir / image_name
+        output_annotation_path = output_subdir / annotation_name
 
         try:
             resize_image(image_path, output_image_path, scale)
@@ -114,7 +118,7 @@ def process_dataset(input_dir: Path, output_dir: Path, scale: float) -> Dict[str
             resize_annotation(annotation_path, output_annotation_path, scale)
             processed_annotations += 1
 
-            print(f"Processed: {image_name}")
+            print(f"Processed: {relative_path}/{image_name}")
 
         except Exception as e:
             print(f"Error processing {image_name}: {e}")
