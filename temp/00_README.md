@@ -2,7 +2,7 @@
 
 このディレクトリには、TreeFormer (WACV 2025) の実装と理論を網羅的に解説したドキュメントが含まれています。
 
-## 📚 ドキュメント一覧
+## ドキュメント一覧
 
 ### コア実装ドキュメント
 
@@ -40,7 +40,7 @@
 
 ### データセット関連ドキュメント
 
-6. **[dataset_investigation.md](./dataset_investigation.md)** ⭐
+6. **[dataset_investigation.md](./dataset_investigation.md)**
    - **Guyotデータセットの完全ガイド**
    - ディレクトリ構造と.ptファイル形式
    - DataLoaderの実装詳細
@@ -48,13 +48,13 @@
    - アノテーションツールのコード例
    - バッチ処理スクリプト
 
-7. **[data_preprocessing.md](./data_preprocessing.md)** ⭐
+7. **[data_preprocessing.md](./data_preprocessing.md)**
    - データ拡張の詳細実装
    - PAFs, Heatmaps, Masksの生成
    - グラフ構造を保つRotation処理
    - **カスタムデータへの適用方法**
 
-## 🎯 使い方ガイド
+## 使い方ガイド
 
 ### 初めて読む方へ
 
@@ -92,24 +92,24 @@ data_preprocessing.md (前処理理解)
 | 拡張手法 | data_preprocessing.md |
 | 評価方法 | 05_evaluation_metrics.md |
 
-## 📊 ドキュメントの特徴
+## ドキュメントの特徴
 
-### ✅ 網羅的
+### 網羅的
 - コードベース全体を詳細に分析
 - 各関数の行番号と実装場所を明記
 - 理論と実装の完全な紐付け
 
-### ✅ 実用的
+### 実用的
 - 実行可能なコード例を豊富に掲載
 - トラブルシューティングガイド付き
 - カスタムデータ作成の完全ガイド
 
-### ✅ 理解しやすい
+### 理解しやすい
 - 図表と数式で視覚的に説明
 - データフロー図で全体像を把握
 - 段階的な解説
 
-## 🔑 主要な概念
+## 主要な概念
 
 ### TreeFormerの3つの柱
 
@@ -129,7 +129,7 @@ data_preprocessing.md (前処理理解)
    - 分類 (Cross Entropy)
    - バウンディングボックス (GIoU)
 
-## 📁 ファイル対応表
+## ファイル対応表
 
 ### 理論 → 実装
 
@@ -146,7 +146,7 @@ data_preprocessing.md (前処理理解)
 | データローダー | `train_mst.py:163-` | dataset_investigation |
 | データ拡張 | `train_mst.py:195-` | data_preprocessing |
 
-## 🚀 クイックスタート
+## クイックスタート
 
 ### 1. 訓練の実行
 
@@ -189,7 +189,7 @@ python valid_smd_guyot_nx.py \
 
 詳細: [05_evaluation_metrics.md](./05_evaluation_metrics.md)
 
-## 💡 重要な実装ポイント
+## 重要な実装ポイント
 
 ### MST制約の核心
 
@@ -233,7 +233,7 @@ masks = generate_masks(points, edges)
 
 詳細: [dataset_investigation.md](./dataset_investigation.md) と [data_preprocessing.md](./data_preprocessing.md)
 
-## 🔬 理論的背景
+## 理論的背景
 
 ### 論文の主張
 
@@ -248,7 +248,7 @@ TreeFormerは以下を主張:
 - **確率調整**: `relation_pred_softmax_true = adjust(relation_pred, mst_mask)`
 - **勾配フロー**: MST自体は固定、確率調整部分に勾配が流れる
 
-## 📝 カスタマイズガイド
+## カスタマイズガイド
 
 ### モデルサイズの調整
 
@@ -285,7 +285,7 @@ TRAIN:
   W_EDGE: 8.0
 ```
 
-## 🐛 トラブルシューティング
+## トラブルシューティング
 
 ### よくある問題
 
@@ -296,14 +296,14 @@ TRAIN:
 | MSTが遅い | scipy計算コスト | エポックごとにスキップ | 02, 04 |
 | データ読み込みエラー | .pt形式が不正 | dataset_investigation.mdの検証スクリプト | dataset_investigation |
 
-## 🤝 貢献
+## 貢献
 
 このドキュメントは以下の調査に基づいています:
 - TreeFormer codebaseの完全な分析
 - arXiv論文 (2411.16132) の理解
 - 実装の動作確認とトレース
 
-## 📖 引用
+## 引用
 
 ```bibtex
 @inproceedings{liu2025treeformer,
@@ -314,13 +314,13 @@ TRAIN:
 }
 ```
 
-## 📞 サポート
+## サポート
 
 各ドキュメントには:
-- ✅ 詳細なコード例
-- ✅ 行番号付き実装箇所の明示
-- ✅ トラブルシューティングガイド
-- ✅ 視覚的な図表
+- 詳細なコード例
+- 行番号付き実装箇所の明示
+- トラブルシューティングガイド
+- 視覚的な図表
 
 が含まれています。
 
