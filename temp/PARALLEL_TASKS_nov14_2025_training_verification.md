@@ -1087,4 +1087,129 @@ claude_code task --parallel \
 
 ---
 
+## 📋 作業実行チェックリスト
+
+### Stage 0: 事前調査フェーズ（完全並列）
+- [x] Task A1: Dataset実ファイル確認
+- [x] Task A2: 既存Config全パラメータ解析
+- [x] Task A3: train_mst.pyコード解析
+- [x] Task A4: 依存関係確認
+
+### Stage 1: テストスクリプト作成（完全並列）
+- [x] Task B1: 画像読み込みテストスクリプト作成
+- [x] Task B2: Config読み込みテストスクリプト作成
+- [x] Task B3: Dataset importテストスクリプト作成
+- [x] Task B4: 依存packageインポートテストスクリプト作成
+
+### Stage 2: Config・依存関係セットアップ（一部並列）
+- [x] Task C1: Guyot用Config作成
+- [x] Task C3: 依存package不足分インストール（C1と並列可）
+- [x] Task C2: Config差分検証（C1完了後）
+
+### Stage 3: Dataset Loader検証（順次）
+- [ ] Task D1: Dataset読み込みテスト
+- [ ] Task D2: DataLoader batch取得テスト
+
+### Stage 4: Training実行（順次→最後並列）
+- [ ] Task E1: DRY RUN (0 epoch)
+- [ ] Task E2: 1 Epoch Training実行
+- [ ] Task E3: Checkpoint検証（E2完了後、E4と並列可）
+- [ ] Task E4: Loss解析と可視化（E2完了後、E3と並列可）
+
+### Stage 5: レポート作成（順次）
+- [ ] Task F1: Training検証レポート作成
+
+---
+
+## 📝 作業記録
+
+### 作業時刻
+- **作業開始時刻**: 2025-11-14 09:43:56 UTC+0000
+- **Stage 0完了時刻**: 2025-11-14 09:53:55 UTC+0000
+- **Stage 1完了時刻**: 2025-11-14 09:57:35 UTC+0000
+- **Stage 2完了時刻**: 2025-11-14 10:01:10 UTC+0000
+- **Stage 3完了時刻**:
+- **Stage 4完了時刻**:
+- **Stage 5完了時刻**:
+- **全作業完了時刻**:
+
+### Task実行記録
+
+| 時刻 | Task | 実行内容 | 結果 | 備考 |
+|------|------|---------|------|------|
+| 2025-11-14 09:43:56 | - | 作業開始 | - | 作業書チェックリスト追加 |
+| 2025-11-14 09:45:17 | A1 | Dataset実ファイル確認 | ❌ 失敗 | data/guyot_200_20_resized/ 不存在、JSON出力済み |
+| 2025-11-14 09:46:49 | A2 | 既存Config全パラメータ解析 | ✅ 成功 | Toulouse config解析完了、JSON出力済み |
+| 2025-11-14 09:47:53 | A3 | train_mst.pyコード解析 | ✅ 成功 | LoadCNNDataset特定、Guyot非互換性警告、JSON出力済み |
+| 2025-11-14 09:49:53 | A4 | 依存関係確認 | ✅ 成功 | 8個の不足package特定、JSON出力済み |
+| 2025-11-14 09:52:21 | - | ブランチマージ | ✅ 成功 | implement-missing-inference-filesマージ、git note追加 |
+| 2025-11-14 09:52:57 | A1 | Dataset実ファイル確認（再実行） | ✅ 成功 | 200 train + 20 test確認、画像サイズ1008x756判明 |
+| 2025-11-14 09:54:50 | B1-B4 | テストスクリプト4本作成 | ✅ 成功 | 画像/Config/Dataset/依存性、実不足はtqdm+skimage |
+| 2025-11-14 09:58:25 | C3 | 依存package不足分インストール | ✅ 成功 | uv経由でtqdm+scikit-image導入、全11 packages利用可 |
+| 2025-11-14 09:59:27 | C1 | Guyot用Config作成 | ✅ 成功 | 4箇所変更（DATA_PATH/DATASET/EPOCHS/exp_name） |
+| 2025-11-14 10:00:50 | C2 | Config差分検証 | ✅ 成功 | Python validation通過、不要箇所変更なし確認 |
+|      |      |         |      |      |
+
+### 問題発生記録
+
+| 時刻 | Task | 問題内容 | 対処内容 | 結果 |
+|------|------|---------|---------|------|
+| 2025-11-14 09:45:17 | A1 | data/guyot_200_20_resized/ ディレクトリが存在しない | ブランチマージでデータセット取得 | ✅ 解決（マージ後Dataset確認成功） |
+| 2025-11-14 09:47:53 | A3 | LoadCNNDatasetが.ptファイル期待、Guyotは.jpeg/.json | 非互換性を警告としてJSON記録 | Task D1でカスタムdataset class実装が必要 |
+| 2025-11-14 09:52:57 | A1 | 画像サイズ1008x756（期待値512x512ではない） | データローダーで512x512にresize予定 | Task D1でDataLoader transform確認が必要 |
+| 2025-11-14 09:54:50 | B1 | アノテーションキーがVineImage（VineFeatureではない） | 実際の構造に合わせて処理 | Task D1でアノテーション読み込み実装時に対応 |
+|      |      |         |         |      |
+
+### 成果物確認チェックリスト
+
+#### JSON結果ファイル
+- [ ] `/tmp/task_a1_dataset_check.json` - status: "success"確認
+- [ ] `/tmp/task_a2_config_analysis.json` - status: "success"確認
+- [ ] `/tmp/task_a3_train_mst_analysis.json` - dataset_class特定確認
+- [ ] `/tmp/task_a4_dependency_check.json` - missing_packages確認
+- [ ] `/tmp/task_e4_loss_analysis.json` - converged: true確認
+
+#### テストスクリプト
+- [ ] `/tmp/test_image_load.py` - 実行成功確認
+- [ ] `/tmp/test_config_load.py` - 実行成功確認
+- [ ] `/tmp/test_dataset_import.py` - 実行成功確認
+- [ ] `/tmp/test_imports.py` - 全package✓確認
+- [ ] `/tmp/test_config_diff.py` - validation通過確認
+
+#### Configファイル
+- [ ] `configs/tree_2D_guyot_test.yaml` - 4箇所変更確認
+- [ ] `configs/tree_2D_guyot_dry_run.yaml` - EPOCHS=0確認
+- [ ] `configs/tree_2D_guyot_1epoch.yaml` - EPOCHS=1確認
+
+#### Training成果物
+- [ ] `trained_weights/test_guyot_1epoch_nov14_2025/*.pth` - checkpoint存在確認
+- [ ] `trained_weights/test_guyot_1epoch_nov14_2025/train.log` - log存在確認
+- [ ] `/tmp/loss_plot.png` - plot生成確認
+
+#### ドキュメント
+- [ ] `temp/PARALLEL_TRAINING_VERIFICATION_REPORT_nov14_2025.md` - レポート完成確認
+
+---
+
+## ✅ 完了の定義
+
+以下の全てを満たした時、作業完了とする：
+
+### 必須条件
+- [ ] Stage 0-5の全タスクチェックリストが完了（全て[x]）
+- [ ] 成果物確認チェックリストの全項目が確認済み
+- [ ] 1 Epoch Training が正常完了（エラーなし）
+- [ ] Checkpoint が正常生成・読み込み可能
+- [ ] Loss が収束傾向（Final < Initial）
+- [ ] 最終レポートが作成され、temp/に保存済み
+
+### 追加条件
+- [ ] 全作業がuv環境で実行された
+- [ ] DRY/KISS/SOLID原則が遵守された
+- [ ] 暗黙的fallbackが使用されていない
+- [ ] 全てのエラーが明示的に処理された
+- [ ] 作業記録テーブルが全て記入済み
+
+---
+
 **END OF PARALLEL TASKS DOCUMENT**
