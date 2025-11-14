@@ -1,0 +1,15 @@
+Technical Details:
+- resize_guyot_dataset.py: Batch processing tool for dataset preparation
+- Image resizing: cv2.resize with INTER_AREA interpolation (best for downsampling)
+- Coordinate scaling: Proportional rescaling preserves annotation accuracy
+- File structure: Maintains original naming convention
+
+Tested Results:
+- Input: 5 images (14MB total, 4032x3024 resolution)
+- Output: 5 images (2MB total, 1008x756 resolution at 0.25 scale)
+- All 5 image-annotation pairs processed successfully
+- Visualization confirmed correct coordinate scaling
+
+Performance:
+- Processing time: ~1 second for 5 images
+- Compression ratio: 7:1 (14MB to 2MB)
