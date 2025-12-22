@@ -81,8 +81,11 @@ Once you have the config file and trained model, run following command to evalua
 ```bash
 python valid_smd_guyot_nx.py
 ```
+## 4. Pretrained Weights
 
-## 4. Citation
+Download pretrained model checkpoints from: [Google Drive](https://drive.google.com/drive/folders/1QFIwOAESSAF8Uc4it0-cAzBiMMszNJg2?usp=sharing)
+
+## 5. Citation
 
 ```
 @inproceedings{liu2025treeformer,
