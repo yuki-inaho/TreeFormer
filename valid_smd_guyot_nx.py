@@ -1254,9 +1254,9 @@ def test(is_use_mst, args):
 
     if is_use_mst:
         # from inference_infinity_mst_nx_dist import relation_infer
-        from inference_infinity_mst_nx_gradmst import relation_infer
+        from inference_infinity_mst_nx import relation_infer
     else:
-        from inference_infinity_gradmst import relation_infer
+        from inference_infinity import relation_infer
 
     from metric_smd import StreetMoverDistance
     from metric_map import BBoxEvaluator
@@ -1760,3 +1760,4 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser('test Relationformer', parents=[get_args_parser(is_test_use_mst=is_test_use_mst)])
     args = parser.parse_args()
     test(is_use_mst=is_test_use_mst, args=args)
+
