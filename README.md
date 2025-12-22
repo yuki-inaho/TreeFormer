@@ -68,10 +68,10 @@ The config file can be found at `.configs/tree_2D_use_mst_only1.yaml` and `.conf
 For example, the command for training Relationformer is following:
 
 ```bash
-python -m torch.distributed.launch --nproc_per_node=8 train.py --config configs/tree_2D_use_mst_only1.yaml --cuda_visible_device 0 1 2 3 4 5 6 7 
+python -m torch.distributed.launch --nproc_per_node=8 train_unmst.py --config configs/tree_2D_use_mst_only1.yaml --cuda_visible_device 0 1 2 3 4 5 6 7 
 ```
 ```bash
-python -m torch.distributed.launch --nproc_per_node=8 train.py --config configs/tree_2D_use_mst_only1.yaml --cuda_visible_device 0 1 2 3 4 5 6 7 --resume trained_weights/check/checkpoint_81_epoch.pkl 
+python -m torch.distributed.launch --nproc_per_node=8 train_mst.py --config configs/tree_2D_use_mst_only1.yaml --cuda_visible_device 0 1 2 3 4 5 6 7 --resume trained_weights/check/checkpoint_81_epoch.pkl 
 ```
 
 ## 3. Evaluation
