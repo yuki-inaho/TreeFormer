@@ -1,0 +1,30 @@
+# Repo-local assets and generated data
+TreeFormer_assets/
+data/
+datasets/
+trained_weights/
+runs/
+outputs/
+
+# Model checkpoints, archives, and training dumps
+*.pkl
+*.pth
+*.pt
+*.npz
+*.tar
+*.tar.gz
+*.tgz
+
+# Python environments, caches, and package metadata
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Build artifacts
+build/
+dist/
+models/ops/build/
