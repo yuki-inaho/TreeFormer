@@ -690,6 +690,22 @@ def dict2obj(dict1):
     return json.loads(json.dumps(dict1), object_hook=obj)
 
 
+def _get_data_attr(data_config, name, default=None):
+    value = getattr(data_config, name, default)
+    return value if value not in (None, "") else default
+
+
+def resolve_eval_path(data_config):
+    eval_path = (
+        _get_data_attr(data_config, "TEST_PATH")
+        or _get_data_attr(data_config, "VAL_PATH")
+        or _get_data_attr(data_config, "DATA_PATH")
+    )
+    if eval_path is None:
+        raise ValueError("DATA.TEST_PATH, DATA.VAL_PATH, or DATA.DATA_PATH must be set for evaluation data")
+    return eval_path
+
+
 def ensure_format(bboxes):
     for bbox in bboxes:
         if bbox[0] > bbox[2]:
@@ -1282,7 +1298,8 @@ def test(is_use_mst, args):
 
     # test_path = "H:\\3D2cut_Single_Guyot\\3D2cut_Single_Guyot\\guyot_data\\test"
     # val_path = r"I:\3D2cut_Single_Guyot\all_same_PAF_move\val_aug"
-    val_path = r"I:\3D2cut_Single_Guyot\all_same_PAF_move\test"
+    # val_path = r"I:\3D2cut_Single_Guyot\all_same_PAF_move\test"
+    val_path = resolve_eval_path(config.DATA)
     #img_test_dataset_path1 = "F:\\new_root_dataset\\individuals_net\\final\\test\\parts\\test50/img"
     #img_test_dataset_path2 = "F:\\new_root_dataset\\individuals_net\\final\\test\\parts\\test50/unet"
     #tgt_test_dataset_path = "F:\\new_root_dataset\\individuals_net\\final\\test\\parts\\test50/data"

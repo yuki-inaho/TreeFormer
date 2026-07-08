@@ -1,0 +1,33 @@
+[project]
+name = "treeformer"
+version = "0.1.0"
+description = "TreeFormer: single-view plant skeleton estimation with Guyot training pipeline support"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.6,<2.7",
+    "torchvision>=0.21,<0.22",
+    "opencv-python>=4.8",
+    "numpy>=2.0,<3.0",
+    "scikit-image>=0.25",
+    "networkx>=3.4",
+    "matplotlib>=3.10",
+    "pyyaml>=6.0",
+    "pillow>=12.0",
+    "mmcv>=1.7,<2.0",
+    "pyvista>=0.48",
+    "monai>=1.5",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1",
+    "ruff>=0.8",
+]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"

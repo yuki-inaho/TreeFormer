@@ -721,6 +721,28 @@ def dict2obj(dict1):
     return json.loads(json.dumps(dict1), object_hook=obj)
 
 
+def _get_data_attr(data_config, name, default=None):
+    value = getattr(data_config, name, default)
+    return value if value not in (None, "") else default
+
+
+def resolve_train_val_paths(data_config):
+    data_path = _get_data_attr(data_config, "DATA_PATH")
+    train_path = _get_data_attr(data_config, "TRAIN_PATH")
+    val_path = _get_data_attr(data_config, "VAL_PATH")
+
+    if train_path is None:
+        if data_path is None:
+            raise ValueError("DATA.DATA_PATH or DATA.TRAIN_PATH must be set for training data")
+        train_path = os.path.join(data_path, "train")
+    if val_path is None:
+        if data_path is None:
+            raise ValueError("DATA.DATA_PATH or DATA.VAL_PATH must be set for validation data")
+        val_path = os.path.join(data_path, "val")
+
+    return train_path, val_path
+
+
 def main(args):
     # Load the config files
     # import torch
@@ -853,8 +875,7 @@ def main(args):
     # val_path = "/sqfs2/cmc/1/work/G15538/u6c043/data/dataset/new_8_new/val_aug"
     # val_path = "/sqfs2/cmc/1/work/G15538/u6c043/data/dataset/move_data/val_aug"
 
-    train_path = "/sqfs2/cmc/1/work/G15538/u6c043/data/dataset/all_same_PAF_move/train_aug"
-    val_path = "/sqfs2/cmc/1/work/G15538/u6c043/data/dataset/all_same_PAF_move/val_aug"
+    train_path, val_path = resolve_train_val_paths(config.DATA)
 
     # dataset_train = LoadCNNDataset(tgt_data_path=tgt_train_dataset_path, feature_path_1=img_train_dataset_path1,
     #                                feature_path_2=img_train_dataset_path2, tgt_detr_dataset_name="DETR_all_",

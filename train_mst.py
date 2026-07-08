@@ -721,6 +721,68 @@ def dict2obj(dict1):
     return json.loads(json.dumps(dict1), object_hook=obj)
 
 
+def _get_data_attr(data_config, name, default=None):
+    value = getattr(data_config, name, default)
+    return value if value not in (None, "") else default
+
+
+def resolve_train_val_paths(data_config):
+    data_path = _get_data_attr(data_config, "DATA_PATH")
+    train_path = _get_data_attr(data_config, "TRAIN_PATH")
+    val_path = _get_data_attr(data_config, "VAL_PATH")
+
+    if train_path is None:
+        if data_path is None:
+            raise ValueError("DATA.DATA_PATH or DATA.TRAIN_PATH must be set for training data")
+        train_path = os.path.join(data_path, "train")
+    if val_path is None:
+        if data_path is None:
+            raise ValueError("DATA.DATA_PATH or DATA.VAL_PATH must be set for validation data")
+        val_path = os.path.join(data_path, "val")
+
+    return train_path, val_path
+
+
+def _is_guyot_dataset(data_config):
+    dataset_name = str(_get_data_attr(data_config, "DATASET", "")).lower()
+    return "guyot" in dataset_name
+
+
+def build_train_val_datasets(data_config):
+    if _is_guyot_dataset(data_config):
+        from guyot_dataset import GuyotDataset, GuyotTrainingAdapter
+
+        data_path = _get_data_attr(data_config, "DATA_PATH")
+        if data_path is None:
+            raise ValueError("DATA.DATA_PATH must be set for Guyot raw dataset loading")
+
+        train_split = _get_data_attr(data_config, "TRAIN_SPLIT", "train")
+        val_split = _get_data_attr(data_config, "VAL_SPLIT", "test")
+        train_dataset = GuyotTrainingAdapter(GuyotDataset(data_path, split=train_split), max_size=data_config.MAX_SIZE)
+        val_dataset = GuyotTrainingAdapter(GuyotDataset(data_path, split=val_split), max_size=data_config.MAX_SIZE)
+        return (
+            _limit_dataset(train_dataset, _get_data_attr(data_config, "TRAIN_LIMIT")),
+            _limit_dataset(val_dataset, _get_data_attr(data_config, "VAL_LIMIT")),
+        )
+
+    train_path, val_path = resolve_train_val_paths(data_config)
+    return (
+        LoadCNNDataset(parent_path=train_path, max_size=data_config.MAX_SIZE, max_change_light_rate=0.3,
+                       is_train=False, is_rotate=True),
+        LoadCNNDataset(parent_path=val_path, max_size=data_config.MAX_SIZE, max_change_light_rate=0.3,
+                       is_train=False, is_rotate=False),
+    )
+
+
+def _limit_dataset(dataset, limit):
+    if limit is None:
+        return dataset
+    limit = int(limit)
+    if limit <= 0:
+        raise ValueError(f"dataset limit must be positive, got {limit}")
+    return torch.utils.data.Subset(dataset, range(min(limit, len(dataset))))
+
+
 def main(args):
     # Load the config files
     # import torch
@@ -853,9 +915,6 @@ def main(args):
     # val_path = "/sqfs2/cmc/1/work/G15538/u6c043/data/dataset/new_8_new/val_aug"
     # val_path = "/sqfs2/cmc/1/work/G15538/u6c043/data/dataset/move_data/val_aug"
 
-    train_path = "/sqfs2/cmc/1/work/G15538/u6c043/data/dataset/all_same_PAF_move/train_aug"
-    val_path = "/sqfs2/cmc/1/work/G15538/u6c043/data/dataset/all_same_PAF_move/val_aug"
-
     # dataset_train = LoadCNNDataset(tgt_data_path=tgt_train_dataset_path, feature_path_1=img_train_dataset_path1,
     #                                feature_path_2=img_train_dataset_path2, tgt_detr_dataset_name="DETR_all_",
     #                                tgt_gnn_dataset_name="GNN_simple_")
@@ -865,8 +924,7 @@ def main(args):
     #                              feature_path_2=img_val_dataset_path2, tgt_detr_dataset_name="DETR_all_",
     #                              tgt_gnn_dataset_name="GNN_simple_")
 
-    dataset_train = LoadCNNDataset(parent_path=train_path, max_size=config.DATA.MAX_SIZE, max_change_light_rate=0.3, is_train=False, is_rotate=True)
-    dataset_val = LoadCNNDataset(parent_path=val_path, max_size=config.DATA.MAX_SIZE, max_change_light_rate=0.3, is_train=False, is_rotate=False)
+    dataset_train, dataset_val = build_train_val_datasets(config.DATA)
 
     # train_indices = list(range(len(dataset_train)))
     # random.shuffle(train_indices)
@@ -874,9 +932,11 @@ def main(args):
 
     train_sampler = torch.utils.data.distributed.DistributedSampler(dataset_train)
 
+    num_workers = int(_get_data_attr(config.DATA, "NUM_WORKERS", 4))
+
     train_loader = DataLoader(dataset_train, batch_size=config.DATA.BATCH_SIZE, shuffle=False,  ######
                               collate_fn=custom_collate_fn, drop_last=True, pin_memory=True,
-                              num_workers=4,
+                              num_workers=num_workers,
                               sampler=train_sampler)
     # dataloader_test = DataLoader(dataset_test, batch_size=1, shuffle=False,
     #                              collate_fn=custom_collate_fn, drop_last=True, pin_memory=True,
@@ -888,7 +948,7 @@ def main(args):
 
     val_loader = DataLoader(dataset_val, batch_size=config.DATA.BATCH_SIZE, shuffle=False,
                             collate_fn=custom_collate_fn, drop_last=True, pin_memory=True,
-                            num_workers=4,
+                            num_workers=num_workers,
                             sampler=valid_sampler)
     if dist.get_rank() == 0:
         print("Dataset splits -> Train: {} | Valid: {}\n".format(len(dataset_train), len(dataset_val)))
@@ -954,6 +1014,12 @@ def main(args):
     if dist.get_rank() == 0:
         os.makedirs(check_path, exist_ok=True)
         print(check_path)
+
+    if epochs <= 0:
+        if dist.get_rank() == 0:
+            print("Dry-run completed: dataset, dataloader, model, optimizer, scheduler, and loss initialized.")
+        dist.barrier()
+        return
 
     # ===================random guessing====================
     # if not args.resume:
