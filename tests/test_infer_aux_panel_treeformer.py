@@ -1,14 +1,18 @@
 from pathlib import Path
+from types import SimpleNamespace
 
+import numpy as np
 import torch
 from PIL import Image
 
 from infer_aux_panel_treeformer import (
+    build_aux_panel_dataset,
     heatmap_to_pil,
     image_tensor_to_pil,
     make_aux_panel,
     make_detail_edge_map,
     paf_to_rgb,
+    unpack_aux_panel_sample,
     write_aux_summary_json,
 )
 
@@ -112,3 +116,47 @@ def test_make_aux_panel_can_render_trained_detail_boundary(tmp_path: Path):
 
     assert panel.width > 0
     assert "pred_detail_boundary_mean" in json_path.read_text(encoding="utf-8")
+
+
+def test_build_aux_panel_dataset_uses_fast_loader_for_fast_seg_checkpoint(tmp_path: Path):
+    split_root = tmp_path / "val"
+    (split_root / "data").mkdir(parents=True)
+    (split_root / "img").mkdir()
+    (split_root / "seg").mkdir()
+    torch.save(
+        SimpleNamespace(
+            list_DETR_points_left_up=torch.tensor([[0.25, 0.25], [0.75, 0.75]], dtype=torch.float32),
+            DETR_node_collections=torch.tensor([[0, 1]], dtype=torch.long),
+        ),
+        split_root / "data" / "sample.pt",
+    )
+    image = np.zeros((40, 60, 3), dtype=np.uint8)
+    image[:, :, 1] = 128
+    Image.fromarray(image).save(split_root / "img" / "sample.png")
+    mask = np.zeros((40, 60), dtype=np.uint8)
+    mask[8:32, 10:50] = 255
+    Image.fromarray(mask).save(split_root / "seg" / "sample.png")
+    checkpoint = {
+        "config": {
+            "DATA": {
+                "FAST_SEGMENTATION_LOADER": True,
+                "SEG_RESIZE_POLICY": "full",
+                "AUX_TARGET_MODE": "seg_heatmap",
+                "AUX_HEATMAP_SIGMA": 2.0,
+            }
+        }
+    }
+
+    dataset, loader_name = build_aux_panel_dataset(
+        split_root=split_root,
+        checkpoint=checkpoint,
+        max_size=32,
+        loader="auto",
+    )
+    image_tensor, _label, _pafs, segmentation, heatmap, _sample_id, sample_name = unpack_aux_panel_sample(dataset[0])
+
+    assert loader_name == "fast-seg"
+    assert sample_name == "sample"
+    assert image_tensor.shape[-1] == 32
+    assert segmentation.max().item() == 1.0
+    assert heatmap.max().item() > 0.9

@@ -31,6 +31,15 @@ from infer_panel_treeformer import (
 from treeformer_train.detail_targets import make_stdc_detail_boundary_target
 
 
+def _nested_mapping_get(mapping: Mapping[str, Any], path: tuple[str, ...], default: Any = None) -> Any:
+    value: Any = mapping
+    for key in path:
+        if not isinstance(value, Mapping) or key not in value:
+            return default
+        value = value[key]
+    return value
+
+
 def _resampling_bilinear() -> int:
     return getattr(Image, "Resampling", Image).BILINEAR
 
@@ -174,6 +183,75 @@ def checkpoint_train_weight(checkpoint: Mapping[str, Any], key: str, default: fl
     return float(train_config.get(key, default))
 
 
+def checkpoint_data_value(checkpoint: Mapping[str, Any], key: str, default: Any = None) -> Any:
+    return _nested_mapping_get(checkpoint, ("config", "DATA", key), default)
+
+
+def checkpoint_uses_fast_seg_loader(checkpoint: Mapping[str, Any]) -> bool:
+    return bool(checkpoint_data_value(checkpoint, "FAST_SEGMENTATION_LOADER", False))
+
+
+def build_aux_panel_dataset(
+    *,
+    split_root: str | Path,
+    checkpoint: Mapping[str, Any],
+    max_size: int,
+    loader: str,
+) -> tuple[Any, str]:
+    if loader not in {"auto", "legacy", "fast-seg"}:
+        raise ValueError(f"loader must be one of ['auto', 'legacy', 'fast-seg'], got {loader!r}")
+
+    use_fast_seg = loader == "fast-seg" or (loader == "auto" and checkpoint_uses_fast_seg_loader(checkpoint))
+    if use_fast_seg:
+        from treeformer_train.fast_seg_dataset import FastSegSupervisedDataset
+
+        detail_scales = checkpoint_data_value(checkpoint, "AUX_DETAIL_SCALES", (1, 2, 4))
+        return (
+            FastSegSupervisedDataset(
+                split_root,
+                max_size=max_size,
+                cache_mode="none",
+                detail_threshold=float(checkpoint_data_value(checkpoint, "AUX_DETAIL_THRESHOLD", 0.1)),
+                detail_scales=tuple(int(item) for item in detail_scales),
+                detail_support_kernel_size=int(checkpoint_data_value(checkpoint, "AUX_DETAIL_SUPPORT_KERNEL_SIZE", 3)),
+                resize_policy=str(checkpoint_data_value(checkpoint, "SEG_RESIZE_POLICY", "legacy_half")),
+                aux_target_mode=str(checkpoint_data_value(checkpoint, "AUX_TARGET_MODE", "seg_only")),
+                heatmap_sigma=float(checkpoint_data_value(checkpoint, "AUX_HEATMAP_SIGMA", 3.0)),
+                heatmap_cutoff=float(checkpoint_data_value(checkpoint, "AUX_HEATMAP_CUTOFF", 0.01)),
+                paf_line_thickness=int(checkpoint_data_value(checkpoint, "AUX_PAF_LINE_THICKNESS", 2)),
+                paf_mask_thickness=int(checkpoint_data_value(checkpoint, "AUX_PAF_MASK_THICKNESS", 6)),
+            ),
+            "fast-seg",
+        )
+
+    from train_mst import LoadCNNDataset
+
+    return (
+        LoadCNNDataset(
+            parent_path=split_root,
+            max_size=max_size,
+            max_change_light_rate=0.3,
+            is_train=False,
+            is_rotate=False,
+            segmentation_target_source=str(checkpoint_data_value(checkpoint, "SEGMENTATION_TARGET_SOURCE", "auto")),
+        ),
+        "legacy",
+    )
+
+
+def unpack_aux_panel_sample(sample: Any) -> tuple[torch.Tensor, str, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, str]:
+    image, label, _nodes, _edges, pafs, _mask, segmentation, heatmap, sample_id = sample
+    return (
+        image,
+        str(label),
+        pafs,
+        segmentation.float(),
+        heatmap.float(),
+        sample_id,
+        Path(str(sample_id or label)).stem,
+    )
+
+
 def predict_aux_maps(
     model: torch.nn.Module, image: torch.Tensor, device: torch.device, target_size: tuple[int, int]
 ) -> dict[str, torch.Tensor]:
@@ -300,6 +378,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--legacy-key", default="net", help="Legacy checkpoint state_dict key")
     parser.add_argument("--strict", action="store_true", help="Use strict checkpoint loading")
     parser.add_argument("--max-size", type=int, default=128, help="Dataset max image size")
+    parser.add_argument(
+        "--loader",
+        default="auto",
+        choices=("auto", "legacy", "fast-seg"),
+        help="Target loader for GT maps. auto uses the checkpoint DATA.FAST_SEGMENTATION_LOADER flag.",
+    )
     parser.add_argument("--limit", type=int, default=None, help="Optional max number of samples to render")
     parser.add_argument("--columns", type=int, default=3, help="Grid columns")
     parser.add_argument("--panel-width", type=int, default=320, help="Rendered width of each panel cell")
@@ -326,19 +410,16 @@ def main() -> None:
     if device.type == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("CUDA was requested but is unavailable")
 
-    from train_mst import LoadCNNDataset
-
     checkpoint_metadata = load_checkpoint_mapping(Path(args.checkpoint))
     show_heatmap = (
         bool(args.show_untrained_maps) or checkpoint_train_weight(checkpoint_metadata, "W_AUX_HEATMAP", 1.0) > 0.0
     )
     show_paf = bool(args.show_untrained_maps) or checkpoint_train_weight(checkpoint_metadata, "W_AUX_PAF", 1.0) > 0.0
-    dataset = LoadCNNDataset(
-        parent_path=args.legacy_split_root,
+    dataset, loader_name = build_aux_panel_dataset(
+        split_root=args.legacy_split_root,
+        checkpoint=checkpoint_metadata,
         max_size=int(args.max_size),
-        max_change_light_rate=0.3,
-        is_train=False,
-        is_rotate=False,
+        loader=str(args.loader),
     )
     model = load_aux_model(
         checkpoint_path=Path(args.checkpoint),
@@ -351,15 +432,15 @@ def main() -> None:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     limit = len(dataset) if args.limit is None or args.limit <= 0 else min(int(args.limit), len(dataset))
-    print(f"Rendering {limit} aux panels from {args.legacy_split_root}")
+    print(f"Rendering {limit} aux panels from {args.legacy_split_root} with {loader_name} loader")
 
     for index in range(limit):
-        image, label, _nodes, _edges, pafs, _mask, unet, heatmap, sample_id = dataset[index]
-        target_size = (int(unet.shape[-2]), int(unet.shape[-1]))
+        image, _label, pafs, segmentation, heatmap, sample_id, sample_name = unpack_aux_panel_sample(dataset[index])
+        target_size = (int(segmentation.shape[-2]), int(segmentation.shape[-1]))
         prediction = predict_aux_maps(model, image, device, target_size)
         panel = make_aux_panel(
             image=image,
-            gt_segmentation=unet,
+            gt_segmentation=segmentation,
             gt_heatmap=heatmap,
             gt_paf=pafs,
             prediction=prediction,
@@ -370,12 +451,11 @@ def main() -> None:
             show_heatmap=show_heatmap,
             show_paf=show_paf,
         )
-        sample_name = Path(str(sample_id or label)).stem
         panel_path = output_dir / f"{sample_name}_aux_panel.png"
         panel.save(panel_path)
         if args.save_json:
             targets = {
-                "segmentation": unet.float(),
+                "segmentation": segmentation.float(),
                 "heatmap": heatmap.float(),
                 "paf": pafs.float().permute(2, 0, 1),
             }
