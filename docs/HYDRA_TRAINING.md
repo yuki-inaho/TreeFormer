@@ -168,3 +168,32 @@ Checkpoints are written by `CheckpointManager`:
 - `epoch_000000.pt`: periodic checkpoint when `checkpoint.save_every > 0`.
 
 Each checkpoint stores model, optimizer, scheduler, metrics, EMA state, and resolved Hydra config.
+
+## Post-training inference panels
+
+After a stage finishes, render per-image summary panels from `best.pt` before deciding whether to keep the stage. The renderer reads current Hydra checkpoints, including embedded resolved config and EMA shadow weights. With `--weights auto`, EMA weights are preferred because validation also runs under EMA when `ema.evaluate=true`.
+
+For a legacy TreeFormer-format dataset, keep the concrete dataset root in the environment:
+
+```bash
+export TREEFORMER_PRIVATE_DATA=<legacy_treeformer_dataset_root>
+export TREEFORMER_INFER_CHECKPOINT=<stage_best_checkpoint>
+export TREEFORMER_INFER_OUTPUT=${TREEFORMER_ASSETS_ROOT:-../TreeFormer_assets}/inference_panels/<stage_name>
+
+just infer-panels
+```
+
+The recipe renders the validation split as:
+
+```bash
+PYTHONPATH=. "$TREEFORMER_PYTHON" infer_panel_treeformer.py \
+  --legacy-split-root "$TREEFORMER_PRIVATE_DATA/val" \
+  --output-dir "$TREEFORMER_INFER_OUTPUT" \
+  --run "Ours|$TREEFORMER_INFER_CHECKPOINT|mst" \
+  --device cuda \
+  --max-size 128 \
+  --inset \
+  --save-graph-json
+```
+
+Each input image gets `<sample_id>_panel.png`; `--save-graph-json` also writes `<sample_id>_pred_graph.json`. Use `TREEFORMER_INFER_MODE=raw` for unconstrained relation output, or `TREEFORMER_INFER_MODE=mst-dist` for the distance-weighted MST variant. For a quick sanity check before rendering a full split, call `infer_panel_treeformer.py` directly with `--limit 3`. Keep output under `${TREEFORMER_ASSETS_ROOT}` and do not commit generated panels or graph JSON.

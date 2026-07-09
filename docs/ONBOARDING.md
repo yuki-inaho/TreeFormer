@@ -25,6 +25,7 @@
 - regularized DA を使う場合は `augmentation=regularized` または `just smoke-private-pretrained-gpu-batch12-aug` を使う。既定 backend は OpenCV で、AlbumentationsX は AGPL / commercial dual license のため `augmentation=regularized_albumentationsx` で明示 opt-in する。光学系 DA は image-only、affine / elastic DA は RGB image と normalized node coordinates を同一 transform から同期更新する。edge topology は維持し、node が画像外へ出る transform は sample 単位で reject する。
 - optional AlbumentationsX backend は `uv pip install --python "$TREEFORMER_PYTHON" --project . --group albumentationsx` で導入する。入れない場合も OpenCV backend で training は継続できる。
 - 学習カリキュラムは Stage 0 no-DA stabilization、Stage 1 photometric OpenCV、Stage 2 graph-aware DA warmup、Stage 3 mild graph-aware DA の checkpoint-resume 方式を初期案とする。詳細は `docs/HYDRA_TRAINING.md` を参照。
+- 学習 stage 完了後は `best.pt` を `infer_panel_treeformer.py` / `just infer-panels` に渡し、validation split の画像ごとに input / ground truth / prediction の summary panel を repo 外へ生成して定性確認する。既定では Hydra checkpoint 内の EMA shadow weights を優先して読む。
 - batch size 12 の VRAM 目安: RTX A4500 / `DATA.MAX_SIZE=128` / official fork-source `grapevein/checkpoint_ours.pkl` / Muon + ScheduleFree 条件で、1 train batch の既存実測は約 3.1GiB。GPU EMA は model state 約 210MiB を shadow と validation backup に使うため、`ema=default` の運用目安は約 3.5-4.0GiB。8GiB 予算では batch size 12 を初期値としてよい。`nvidia-smi` の GPU 全体使用量は他プロセスを含むため、TreeFormer 単体の VRAM 目安と混同しない。
 - CUDA ops の検証は `MultiScaleDeformableAttention` module import と forward double / float check を基準にする。`models/ops/test.py` 全体は high-channel `gradcheck` まで実行するストレステストで、20GB GPU でも OOM し得るため、full test OOM を通常学習 1 batch の OOM と混同しない。
 
@@ -45,6 +46,7 @@
 | pretrained weights | `${TREEFORMER_ASSETS_ROOT}/pretrained_weights/fork_source_main/` | フォーク元 README の Google Drive から取得した checkpoint。repo 外管理 |
 | Hydra training | `docs/HYDRA_TRAINING.md` | Hydra entrypoint、EMA、TensorBoard、checkpoint、Muon + ScheduleFree optimizer の運用 |
 | Augmentation module | `treeformer_train/augmentations/` | AlbumentationsX/OpenCV 光学 DA と graph-aware affine / elastic DA。dataset 本体へ直書きしないための composable transform 層 |
+| Inference panels | `infer_panel_treeformer.py` | 学習済み checkpoint から画像ごとの input / ground truth / prediction summary panel と graph JSON を repo 外に生成 |
 
 ## 4. タスク境界（任せること / 任せないこと）
 
@@ -55,6 +57,7 @@
 - augmentation config と transform contract の保守。geometry DA は必ず image と node coordinates を同期する。
 - full training を開始する前の事前検証、ログ設計、checkpoint 保存先確認。
 - README / docs / workdoc への実行手順追記。
+- training stage 後の qualitative check 用 inference panel 生成。checkpoint と dataset root は環境変数または CLI 引数で渡し、出力は `${TREEFORMER_ASSETS_ROOT}` 配下に置く。
 
 ### 任せないタスク（例）
 
@@ -64,6 +67,7 @@
 - private dataset の実パス、生成コマンド、内部由来が分かる名前の docs 追記。
 - 既存 training loop、loss、model architecture の大規模変更。
 - user / 他エージェント由来の未追跡ファイルの勝手な削除や取り込み。
+- generated panel image / graph JSON の Git 追加。
 
 ## 5. インタラクション方針
 
@@ -81,6 +85,7 @@
 3. `PYTHONPATH=. "$TREEFORMER_PYTHON" train_hydra.py --cfg job` を実行し、Hydra config が合成できることを確認する。
 4. `git status --ignored --short` で checkpoint / dataset / cache が repo に混入していないことを確認し、残る ignored artifact が CUDA build artifact だけかを報告する。
 5. `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. "$TREEFORMER_PYTHON" -m pytest -p no:cacheprovider tests/test_graph_augmentations.py -q` を実行し、augmentation contract が通ることを確認する。
+6. `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. "$TREEFORMER_PYTHON" -m pytest -p no:cacheprovider tests/test_infer_panel_treeformer.py -q` を実行し、checkpoint weight selection と panel rendering helper が通ることを確認する。
 
 ## 7. 運用ルール・変更管理
 
