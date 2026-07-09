@@ -46,7 +46,11 @@ def image_tensor_to_pil(tensor: torch.Tensor) -> Image.Image:
 
 
 def normalize01(values: torch.Tensor | np.ndarray, eps: float = 1e-6) -> np.ndarray:
-    array = values.detach().cpu().float().numpy() if isinstance(values, torch.Tensor) else np.asarray(values, dtype=np.float32)
+    array = (
+        values.detach().cpu().float().numpy()
+        if isinstance(values, torch.Tensor)
+        else np.asarray(values, dtype=np.float32)
+    )
     array = np.nan_to_num(array.astype(np.float32), nan=0.0, posinf=0.0, neginf=0.0)
     min_value = float(array.min()) if array.size else 0.0
     max_value = float(array.max()) if array.size else 0.0
@@ -56,7 +60,11 @@ def normalize01(values: torch.Tensor | np.ndarray, eps: float = 1e-6) -> np.ndar
 
 
 def grayscale_to_pil(values: torch.Tensor | np.ndarray, *, normalize: bool = False) -> Image.Image:
-    array = normalize01(values) if normalize else np.asarray(values.detach().cpu() if isinstance(values, torch.Tensor) else values, dtype=np.float32)
+    array = (
+        normalize01(values)
+        if normalize
+        else np.asarray(values.detach().cpu() if isinstance(values, torch.Tensor) else values, dtype=np.float32)
+    )
     array = np.clip(array, 0.0, 1.0)
     return Image.fromarray((array * 255.0).astype(np.uint8), mode="L").convert("RGB")
 
@@ -72,7 +80,9 @@ def heatmap_to_pil(values: torch.Tensor | np.ndarray) -> Image.Image:
     return Image.fromarray((rgb * 255.0).astype(np.uint8), mode="RGB")
 
 
-def overlay_map(image: Image.Image, mask: torch.Tensor | np.ndarray, color: tuple[int, int, int], alpha: float = 0.45) -> Image.Image:
+def overlay_map(
+    image: Image.Image, mask: torch.Tensor | np.ndarray, color: tuple[int, int, int], alpha: float = 0.45
+) -> Image.Image:
     base = np.asarray(image.convert("RGB"), dtype=np.float32)
     values = np.asarray(mask.detach().cpu() if isinstance(mask, torch.Tensor) else mask, dtype=np.float32)
     values = np.clip(values, 0.0, 1.0)
@@ -105,10 +115,16 @@ def paf_to_rgb(paf: torch.Tensor | np.ndarray) -> Image.Image:
     return Image.fromarray((rgb * 255.0).astype(np.uint8), mode="RGB")
 
 
-def make_detail_edge_map(mask: torch.Tensor, *, threshold: float = 0.1, scales: tuple[int, ...] = (1, 2, 4)) -> torch.Tensor:
+def make_detail_edge_map(
+    mask: torch.Tensor, *, threshold: float = 0.1, scales: tuple[int, ...] = (1, 2, 4)
+) -> torch.Tensor:
     """Create the STDC-style boundary target used by optional detail supervision."""
 
-    return make_stdc_detail_boundary_target(mask, threshold=threshold, scales=scales, support_kernel_size=3).squeeze(0).squeeze(0)
+    return (
+        make_stdc_detail_boundary_target(mask, threshold=threshold, scales=scales, support_kernel_size=3)
+        .squeeze(0)
+        .squeeze(0)
+    )
 
 
 def resize_aux_maps(aux_maps: torch.Tensor, target_size: tuple[int, int]) -> torch.Tensor:
@@ -148,7 +164,19 @@ def load_aux_model(
     return model
 
 
-def predict_aux_maps(model: torch.nn.Module, image: torch.Tensor, device: torch.device, target_size: tuple[int, int]) -> dict[str, torch.Tensor]:
+def checkpoint_train_weight(checkpoint: Mapping[str, Any], key: str, default: float) -> float:
+    config = checkpoint.get("config")
+    if not isinstance(config, Mapping):
+        return default
+    train_config = config.get("TRAIN")
+    if not isinstance(train_config, Mapping):
+        return default
+    return float(train_config.get(key, default))
+
+
+def predict_aux_maps(
+    model: torch.nn.Module, image: torch.Tensor, device: torch.device, target_size: tuple[int, int]
+) -> dict[str, torch.Tensor]:
     with torch.inference_mode():
         _, output = model([image.to(device)])
         aux_maps = output.get("aux_maps")
@@ -176,18 +204,21 @@ def make_aux_panel(
     panel_width: int,
     pad: int,
     show_derived_detail: bool = False,
+    show_heatmap: bool = True,
+    show_paf: bool = True,
 ) -> Image.Image:
     input_image = image_tensor_to_pil(image)
     gt_segmentation = gt_segmentation.float().clamp(0.0, 1.0)
     gt_heatmap = gt_heatmap.float().clamp(0.0, 1.0)
-    gt_paf = gt_paf.float().permute(2, 0, 1).clamp(-1.0, 1.0) if gt_paf.ndim == 3 and gt_paf.shape[-1] == 2 else gt_paf.float()
+    gt_paf = (
+        gt_paf.float().permute(2, 0, 1).clamp(-1.0, 1.0)
+        if gt_paf.ndim == 3 and gt_paf.shape[-1] == 2
+        else gt_paf.float()
+    )
 
     pred_segmentation = prediction["segmentation"]
     pred_heatmap = prediction["heatmap"]
     pred_paf = prediction["paf"]
-
-    gt_paf_magnitude = torch.linalg.vector_norm(gt_paf, dim=0).clamp(0.0, 1.0)
-    pred_paf_magnitude = torch.linalg.vector_norm(pred_paf, dim=0).clamp(0.0, 1.0)
 
     panels = [
         add_label(input_image, "Input"),
@@ -209,20 +240,30 @@ def make_aux_panel(
                 add_label(grayscale_to_pil(make_detail_edge_map(pred_segmentation)), "Pred derived boundary"),
             ]
         )
-    panels.extend(
-        [
-            add_label(heatmap_to_pil(gt_heatmap), "GT node heatmap"),
-            add_label(heatmap_to_pil(pred_heatmap), "Pred node heatmap"),
-            add_label(grayscale_to_pil(gt_paf_magnitude), "GT PAF magnitude"),
-            add_label(grayscale_to_pil(pred_paf_magnitude), "Pred PAF magnitude"),
-            add_label(paf_to_rgb(gt_paf), "GT PAF direction"),
-            add_label(paf_to_rgb(pred_paf), "Pred PAF direction"),
-        ]
-    )
+    if show_heatmap:
+        panels.extend(
+            [
+                add_label(heatmap_to_pil(gt_heatmap), "GT node heatmap"),
+                add_label(heatmap_to_pil(pred_heatmap), "Pred node heatmap"),
+            ]
+        )
+    if show_paf:
+        gt_paf_magnitude = torch.linalg.vector_norm(gt_paf, dim=0).clamp(0.0, 1.0)
+        pred_paf_magnitude = torch.linalg.vector_norm(pred_paf, dim=0).clamp(0.0, 1.0)
+        panels.extend(
+            [
+                add_label(grayscale_to_pil(gt_paf_magnitude), "GT PAF magnitude"),
+                add_label(grayscale_to_pil(pred_paf_magnitude), "Pred PAF magnitude"),
+                add_label(paf_to_rgb(gt_paf), "GT PAF direction"),
+                add_label(paf_to_rgb(pred_paf), "Pred PAF direction"),
+            ]
+        )
     return make_panel_grid(panels, columns=columns, pad=pad, panel_width=panel_width)
 
 
-def write_aux_summary_json(path: Path, *, sample_id: str, prediction: Mapping[str, torch.Tensor], targets: Mapping[str, torch.Tensor]) -> None:
+def write_aux_summary_json(
+    path: Path, *, sample_id: str, prediction: Mapping[str, torch.Tensor], targets: Mapping[str, torch.Tensor]
+) -> None:
     pred_seg = prediction["segmentation"]
     gt_seg = targets["segmentation"]
     pred_heatmap = prediction["heatmap"]
@@ -246,12 +287,16 @@ def write_aux_summary_json(path: Path, *, sample_id: str, prediction: Mapping[st
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="TreeFormer aux-map inference panel renderer")
-    parser.add_argument("--legacy-split-root", required=True, help="Legacy TreeFormer split root containing img/ and data/")
+    parser.add_argument(
+        "--legacy-split-root", required=True, help="Legacy TreeFormer split root containing img/ and data/"
+    )
     parser.add_argument("--checkpoint", required=True, help="Hydra aux-supervised checkpoint path")
     parser.add_argument("--output-dir", required=True, help="Directory where aux panels are saved")
     parser.add_argument("--device", default="cuda", choices=("cuda", "cpu"), help="Inference device")
     parser.add_argument("--cuda-visible-devices", default=None, help="Optional CUDA_VISIBLE_DEVICES value")
-    parser.add_argument("--weights", default="auto", choices=("auto", "ema", "model"), help="Checkpoint weights to load")
+    parser.add_argument(
+        "--weights", default="auto", choices=("auto", "ema", "model"), help="Checkpoint weights to load"
+    )
     parser.add_argument("--legacy-key", default="net", help="Legacy checkpoint state_dict key")
     parser.add_argument("--strict", action="store_true", help="Use strict checkpoint loading")
     parser.add_argument("--max-size", type=int, default=128, help="Dataset max image size")
@@ -263,6 +308,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--show-derived-detail",
         action="store_true",
         help="Render segmentation-derived boundary maps even when the checkpoint has no detail head",
+    )
+    parser.add_argument(
+        "--show-untrained-maps",
+        action="store_true",
+        help="Render heatmap/PAF panels even when their checkpoint loss weights are zero",
     )
     parser.add_argument("--save-json", action="store_true", help="Save compact per-sample map statistics JSON")
     return parser
@@ -278,6 +328,11 @@ def main() -> None:
 
     from train_mst import LoadCNNDataset
 
+    checkpoint_metadata = load_checkpoint_mapping(Path(args.checkpoint))
+    show_heatmap = (
+        bool(args.show_untrained_maps) or checkpoint_train_weight(checkpoint_metadata, "W_AUX_HEATMAP", 1.0) > 0.0
+    )
+    show_paf = bool(args.show_untrained_maps) or checkpoint_train_weight(checkpoint_metadata, "W_AUX_PAF", 1.0) > 0.0
     dataset = LoadCNNDataset(
         parent_path=args.legacy_split_root,
         max_size=int(args.max_size),
@@ -312,6 +367,8 @@ def main() -> None:
             panel_width=int(args.panel_width),
             pad=int(args.pad),
             show_derived_detail=bool(args.show_derived_detail),
+            show_heatmap=show_heatmap,
+            show_paf=show_paf,
         )
         sample_name = Path(str(sample_id or label)).stem
         panel_path = output_dir / f"{sample_name}_aux_panel.png"
@@ -322,7 +379,12 @@ def main() -> None:
                 "heatmap": heatmap.float(),
                 "paf": pafs.float().permute(2, 0, 1),
             }
-            write_aux_summary_json(output_dir / f"{sample_name}_aux_summary.json", sample_id=sample_name, prediction=prediction, targets=targets)
+            write_aux_summary_json(
+                output_dir / f"{sample_name}_aux_summary.json",
+                sample_id=sample_name,
+                prediction=prediction,
+                targets=targets,
+            )
         print(f"[{index + 1}/{limit}] saved: {panel_path}")
 
 

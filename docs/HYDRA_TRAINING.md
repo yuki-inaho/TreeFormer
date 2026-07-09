@@ -103,7 +103,7 @@ export TREEFORMER_AUX_PANEL_OUTPUT=${TREEFORMER_ASSETS_ROOT:-../TreeFormer_asset
 just infer-aux-panels
 ```
 
-`infer_aux_panel_treeformer.py` writes one `<sample_id>_aux_panel.png` per image. The panels include input, GT/pred segmentation overlays, GT/pred node heatmaps, and GT/pred PAF magnitude/direction maps. The GT segmentation overlay should be read from the same external TPE mask contract as training. When a checkpoint has a fifth aux channel, panels also show `GT detail boundary target` and `Pred detail boundary head`; otherwise derived boundary maps stay hidden unless `--show-derived-detail` is passed explicitly.
+`infer_aux_panel_treeformer.py` writes one `<sample_id>_aux_panel.png` per image. The panels include input and GT/pred segmentation overlays. The GT segmentation overlay should be read from the same external TPE mask contract as training. When a checkpoint has a fifth aux channel, panels also show `GT detail boundary target` and `Pred detail boundary head`; otherwise derived boundary maps stay hidden unless `--show-derived-detail` is passed explicitly. Heatmap and PAF panels are hidden automatically when their checkpoint loss weights are zero; pass `--show-untrained-maps` only for debugging raw aux channels.
 
 Operational notes:
 
@@ -226,7 +226,7 @@ PYTHONPATH=. "$TREEFORMER_PYTHON" infer_aux_panel_treeformer.py \
   --save-json
 ```
 
-The optional JSON summary stores compact scalar statistics only. Generated panels and summaries must stay under `${TREEFORMER_ASSETS_ROOT}` or another repo-external artifact directory. Detail boundary panels are model-output panels only when the checkpoint has a fifth aux channel; use `--show-derived-detail` only for debugging segmentation-derived boundaries.
+The optional JSON summary stores compact scalar statistics only. Generated panels and summaries must stay under `${TREEFORMER_ASSETS_ROOT}` or another repo-external artifact directory. Detail boundary panels are model-output panels only when the checkpoint has a fifth aux channel; use `--show-derived-detail` only for debugging segmentation-derived boundaries. For segmentation-only checkpoints, heatmap/PAF maps are not trained and are omitted by default.
 
 ## Optimizers
 
