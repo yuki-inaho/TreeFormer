@@ -116,6 +116,7 @@ Operational notes:
 - `train=seg_supervised` adds a weak optional STDC-style detail boundary auxiliary head as the fifth aux channel. Its target is a multi-scale Laplacian boundary map derived from the external segmentation mask, not a graph edge or PAF. `W_AUX_DETAIL=0.1` keeps it as a light boundary-sharpening regularizer while BCE + Dice segmentation remains the primary objective.
 - `train=seg_supervised` uses `FastSegSupervisedDataset` by default. It reads only RGB and external segmentation masks, avoiding legacy graph-derived PAF/heatmap generation while keeping the same aux training batch contract with zero-valued unused PAF/heatmap tensors.
 - For full segmentation-only training, generate repo-external cache first with `just cache-private-fast-seg`, then run `just train-private-seg-supervised`. The full recipe uses `DATA.SEG_CACHE_MODE=disk`, `DATA.NUM_WORKERS=4`, `DATA.PERSISTENT_WORKERS=true`, and `DATA.PREFETCH_FACTOR=2` by default. Set `TREEFORMER_SEG_CACHE_MODE=none` to bypass disk cache.
+- `FastSegSupervisedDataset` defaults to `DATA.SEG_RESIZE_POLICY=legacy_half`, matching the legacy loader behavior that halves the raw image before applying `DATA.MAX_SIZE`. For a raw 800x600 image, `DATA.MAX_SIZE=128` becomes 128x96 and `DATA.MAX_SIZE=512` still caps at 400x300. Use `DATA.SEG_RESIZE_POLICY=full` with `DATA.MAX_SIZE=512` to train at 512x384 from the original image.
 - Aux/seg stages may keep EMA updates enabled, but use `ema.evaluate=false` for validation and best-checkpoint selection because the aux head is newly initialized and `decay=0.9999` changes too slowly during short stages.
 - RGB input is normalized by the legacy loader with `Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])`, so model input is scaled from `[0, 1]` to `[-1, 1]`.
 - In `train=seg_supervised`, `W_AUX_HEATMAP=0` and `W_AUX_PAF=0`; heatmap and PAF channels are not trained in that stage. The aux output layout is segmentation, heatmap, PAF-x, PAF-y, optional detail boundary. `train=aux_supervised` keeps the original 4-channel layout and has `W_AUX_DETAIL=0`.
@@ -251,7 +252,19 @@ PYTHONPATH=. "$TREEFORMER_PYTHON" generate_fast_seg_cache.py \
   --dataset-root "$TREEFORMER_PRIVATE_DATA" \
   --cache-root "$TREEFORMER_SEG_CACHE_ROOT" \
   --splits train val \
-  --max-size 128
+  --max-size 128 \
+  --resize-policy legacy_half
+```
+
+For high-resolution 512x384 training from 800x600 RGB images, use:
+
+```bash
+export TREEFORMER_MAX_SIZE=512
+export TREEFORMER_SEG_RESIZE_POLICY=full
+export TREEFORMER_SEG_CACHE_ROOT=${TREEFORMER_ASSETS_ROOT:-../TreeFormer_assets}/cache/fast_seg/<cache_name>_max512_full
+
+just cache-private-fast-seg
+just train-private-seg-supervised
 ```
 
 Representative timing with `DATA.MAX_SIZE=128` and `BATCH_SIZE=12`:

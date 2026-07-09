@@ -60,6 +60,16 @@ def test_fast_seg_dataset_returns_legacy_aux_batch_contract(tmp_path: Path):
     assert batch[6].shape == (2, 1, 32, 40)
 
 
+def test_fast_seg_dataset_can_resize_from_full_resolution(tmp_path: Path):
+    split_root = _write_split(tmp_path, "train", count=1)
+    dataset = FastSegSupervisedDataset(split_root, max_size=64, resize_policy="full")
+
+    image, *_rest, segmentation, _heatmap, _data_id = dataset[0]
+
+    assert image.shape == (3, 51, 64)
+    assert segmentation.shape == (51, 64)
+
+
 def test_fast_seg_dataset_uses_disk_cache(tmp_path: Path):
     split_root = _write_split(tmp_path, "train", count=1)
     cache_dir = tmp_path / "cache" / "train"
@@ -71,6 +81,18 @@ def test_fast_seg_dataset_uses_disk_cache(tmp_path: Path):
     assert len(list(cache_dir.glob("*.pt"))) == 1
     image, *_rest = dataset[0]
     assert image.shape == (3, 32, 40)
+
+
+def test_fast_seg_dataset_disk_cache_respects_resize_policy(tmp_path: Path):
+    split_root = _write_split(tmp_path, "train", count=1)
+    cache_dir = tmp_path / "cache" / "train"
+
+    stats = build_fast_seg_cache(split_root=split_root, cache_dir=cache_dir, max_size=64, resize_policy="full")
+    dataset = FastSegSupervisedDataset(split_root, max_size=64, cache_mode="disk", cache_dir=cache_dir, resize_policy="full")
+
+    assert stats == {"samples": 1, "written": 1, "skipped": 0}
+    image, *_rest = dataset[0]
+    assert image.shape == (3, 51, 64)
 
 
 def test_build_train_val_datasets_can_select_fast_seg_loader(tmp_path: Path):
@@ -88,6 +110,7 @@ def test_build_train_val_datasets_can_select_fast_seg_loader(tmp_path: Path):
         FAST_SEGMENTATION_LOADER=True,
         SEG_CACHE_MODE="none",
         SEG_CACHE_ROOT=str(tmp_path / "cache"),
+        SEG_RESIZE_POLICY="legacy_half",
         AUX_DETAIL_THRESHOLD=0.1,
         AUX_DETAIL_SCALES=[1, 2, 4],
         AUX_DETAIL_SUPPORT_KERNEL_SIZE=3,

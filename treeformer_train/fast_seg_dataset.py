@@ -61,9 +61,15 @@ def _read_binary_mask(path: Path) -> np.ndarray:
     return (mask_float > 0.5).astype(np.float32)
 
 
-def _resize_hw(height: int, width: int, max_size: int) -> tuple[int, int]:
-    cut_height = height // 2
-    cut_width = width // 2
+def _resize_hw(height: int, width: int, max_size: int, resize_policy: str = "legacy_half") -> tuple[int, int]:
+    resize_policy = resize_policy.lower()
+    if resize_policy == "legacy_half":
+        height = height // 2
+        width = width // 2
+    elif resize_policy != "full":
+        raise ValueError(f"resize_policy must be one of ['legacy_half', 'full'], got {resize_policy!r}")
+    cut_height = height
+    cut_width = width
     if max(cut_width, cut_height) <= int(max_size):
         return cut_height, cut_width
     if cut_width > cut_height:
@@ -73,13 +79,18 @@ def _resize_hw(height: int, width: int, max_size: int) -> tuple[int, int]:
     return int(max_size), int(cut_width * scale)
 
 
-def _prepare_image_and_mask(image_path: Path, mask_path: Path, max_size: int) -> tuple[torch.Tensor, torch.Tensor]:
+def _prepare_image_and_mask(
+    image_path: Path,
+    mask_path: Path,
+    max_size: int,
+    resize_policy: str = "legacy_half",
+) -> tuple[torch.Tensor, torch.Tensor]:
     image = _read_rgb(image_path)
     mask = _read_binary_mask(mask_path)
     if mask.shape[:2] != image.shape[:2]:
         mask = cv2.resize(mask, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_NEAREST)
 
-    out_h, out_w = _resize_hw(image.shape[0], image.shape[1], max_size)
+    out_h, out_w = _resize_hw(image.shape[0], image.shape[1], max_size, resize_policy=resize_policy)
     image = cv2.resize(image, (out_w, out_h), interpolation=cv2.INTER_LINEAR)
     mask = cv2.resize(mask, (out_w, out_h), interpolation=cv2.INTER_NEAREST)
 
@@ -137,6 +148,7 @@ def build_fast_seg_cache(
     detail_threshold: float = 0.1,
     detail_scales: tuple[int, ...] = (1, 2, 4),
     detail_support_kernel_size: int = 3,
+    resize_policy: str = "legacy_half",
     overwrite: bool = False,
 ) -> dict[str, int]:
     samples = discover_fast_seg_samples(split_root)
@@ -147,6 +159,8 @@ def build_fast_seg_cache(
         "scales": [int(item) for item in detail_scales],
         "support_kernel_size": int(detail_support_kernel_size),
     }
+    if str(resize_policy).lower() != "legacy_half":
+        detail_config["resize_policy"] = str(resize_policy).lower()
     written = 0
     skipped = 0
     for sample in samples:
@@ -154,7 +168,12 @@ def build_fast_seg_cache(
         if cache_path.exists() and not overwrite:
             skipped += 1
             continue
-        image, segmentation = _prepare_image_and_mask(sample.image_path, sample.mask_path, max_size)
+        image, segmentation = _prepare_image_and_mask(
+            sample.image_path,
+            sample.mask_path,
+            max_size,
+            resize_policy=resize_policy,
+        )
         detail = make_stdc_detail_boundary_target(
             segmentation,
             threshold=detail_threshold,
@@ -192,6 +211,7 @@ class FastSegSupervisedDataset(Dataset):
         detail_threshold: float = 0.1,
         detail_scales: tuple[int, ...] = (1, 2, 4),
         detail_support_kernel_size: int = 3,
+        resize_policy: str = "legacy_half",
     ) -> None:
         self.split_root = Path(split_root)
         self.max_size = int(max_size)
@@ -205,11 +225,16 @@ class FastSegSupervisedDataset(Dataset):
         self.detail_threshold = float(detail_threshold)
         self.detail_scales = tuple(int(item) for item in detail_scales)
         self.detail_support_kernel_size = int(detail_support_kernel_size)
+        self.resize_policy = str(resize_policy).lower()
+        if self.resize_policy not in {"legacy_half", "full"}:
+            raise ValueError(f"resize_policy must be one of ['legacy_half', 'full'], got {resize_policy!r}")
         self.detail_config = {
             "threshold": self.detail_threshold,
             "scales": list(self.detail_scales),
             "support_kernel_size": self.detail_support_kernel_size,
         }
+        if self.resize_policy != "legacy_half":
+            self.detail_config["resize_policy"] = self.resize_policy
         self._memory_cache: dict[int, tuple[Any, ...]] = {}
 
     def __len__(self) -> int:
@@ -237,7 +262,12 @@ class FastSegSupervisedDataset(Dataset):
         )
 
     def _build_sample(self, sample: FastSegSample) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        image, segmentation = _prepare_image_and_mask(sample.image_path, sample.mask_path, self.max_size)
+        image, segmentation = _prepare_image_and_mask(
+            sample.image_path,
+            sample.mask_path,
+            self.max_size,
+            resize_policy=self.resize_policy,
+        )
         detail = make_stdc_detail_boundary_target(
             segmentation,
             threshold=self.detail_threshold,
@@ -289,6 +319,7 @@ def main() -> None:
     parser.add_argument("--detail-threshold", type=float, default=0.1)
     parser.add_argument("--detail-scales", default="1,2,4")
     parser.add_argument("--detail-support-kernel-size", type=int, default=3)
+    parser.add_argument("--resize-policy", choices=["legacy_half", "full"], default="legacy_half")
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()
 
@@ -304,6 +335,7 @@ def main() -> None:
             detail_threshold=float(args.detail_threshold),
             detail_scales=scales,
             detail_support_kernel_size=int(args.detail_support_kernel_size),
+            resize_policy=str(args.resize_policy),
             overwrite=bool(args.overwrite),
         )
         for key, value in stats.items():

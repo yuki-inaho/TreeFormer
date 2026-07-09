@@ -862,6 +862,7 @@ def build_train_val_datasets(data_config):
         train_cache_dir = os.path.join(cache_root, "train") if cache_root else None
         val_cache_dir = os.path.join(cache_root, "val") if cache_root else None
         detail_scales = tuple(int(item) for item in _get_data_attr(data_config, "AUX_DETAIL_SCALES", (1, 2, 4)))
+        seg_resize_policy = str(_get_data_attr(data_config, "SEG_RESIZE_POLICY", "legacy_half"))
         train_dataset = FastSegSupervisedDataset(
             train_path,
             max_size=data_config.MAX_SIZE,
@@ -870,6 +871,7 @@ def build_train_val_datasets(data_config):
             detail_threshold=float(_get_data_attr(data_config, "AUX_DETAIL_THRESHOLD", 0.1)),
             detail_scales=detail_scales,
             detail_support_kernel_size=int(_get_data_attr(data_config, "AUX_DETAIL_SUPPORT_KERNEL_SIZE", 3)),
+            resize_policy=seg_resize_policy,
         )
         val_dataset = FastSegSupervisedDataset(
             val_path,
@@ -879,6 +881,7 @@ def build_train_val_datasets(data_config):
             detail_threshold=float(_get_data_attr(data_config, "AUX_DETAIL_THRESHOLD", 0.1)),
             detail_scales=detail_scales,
             detail_support_kernel_size=int(_get_data_attr(data_config, "AUX_DETAIL_SUPPORT_KERNEL_SIZE", 3)),
+            resize_policy=seg_resize_policy,
         )
         return (
             _limit_dataset(train_dataset, _get_data_attr(data_config, "TRAIN_LIMIT")),
