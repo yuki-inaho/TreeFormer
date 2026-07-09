@@ -1,10 +1,11 @@
 import numpy as np
+import pytest
 import torch
 
 from inference_infinity_gradmst import relation_infer as unconstrained_infer
 from inference_infinity_mst_nx_dist import relation_infer as distance_mst_infer
 from inference_infinity_mst_nx_gradmst import relation_infer as mst_infer
-from inference_treeformer import compute_mst_edges
+from inference_treeformer import compute_mst_edges, compute_virtual_root_forest_edges, relation_infer
 
 
 class DummyRelationEmbed(torch.nn.Module):
@@ -76,3 +77,70 @@ def test_distance_mst_infer_accepts_optional_distance_weighting():
     )
 
     assert edges[0].shape == (2, 2)
+
+
+def test_virtual_root_mst_splits_two_components():
+    node_pairs = torch.tensor(
+        [[0, 1], [0, 2], [0, 3], [1, 2], [1, 3], [2, 3]],
+        dtype=torch.long,
+    )
+    edge_scores = torch.tensor([0.95, 0.05, 0.05, 0.05, 0.05, 0.95], dtype=torch.float32)
+    root_scores = torch.tensor([0.6, 0.6, 0.6, 0.6], dtype=torch.float32)
+
+    result = compute_virtual_root_forest_edges(node_pairs, edge_scores, root_scores)
+
+    np.testing.assert_array_equal(result.real_edges, np.array([[0, 1], [2, 3]]))
+    assert len(result.root_edges_node_indices) == 2
+    np.testing.assert_array_equal(result.component_id, np.array([0, 0, 1, 1]))
+
+
+def test_virtual_root_lambda_controls_split_merge():
+    node_pairs = torch.tensor(
+        [[0, 1], [0, 2], [0, 3], [1, 2], [1, 3], [2, 3]],
+        dtype=torch.long,
+    )
+    edge_scores = torch.tensor([0.95, 0.05, 0.05, 0.45, 0.05, 0.95], dtype=torch.float32)
+    root_scores = torch.tensor([0.6, 0.6, 0.6, 0.6], dtype=torch.float32)
+
+    split = compute_virtual_root_forest_edges(node_pairs, edge_scores, root_scores, root_penalty=0.0)
+    merged = compute_virtual_root_forest_edges(node_pairs, edge_scores, root_scores, root_penalty=0.3)
+
+    assert len(split.root_edges_node_indices) == 2
+    assert len(merged.root_edges_node_indices) == 1
+    np.testing.assert_array_equal(merged.real_edges, np.array([[0, 1], [1, 2], [2, 3]]))
+
+
+def test_relation_infer_vr_mst_returns_forest_without_bridge():
+    h = torch.zeros((1, 5, 2), dtype=torch.float32)
+    out = {
+        "pred_logits": torch.tensor([[[0.0, 1.0], [0.0, 1.0], [0.0, 1.0], [0.0, 1.0]]], dtype=torch.float32),
+        "pred_nodes": torch.tensor(
+            [[[0.0, 0.0, 0.2, 0.2], [0.2, 0.0, 0.2, 0.2], [0.8, 0.0, 0.2, 0.2], [1.0, 0.0, 0.2, 0.2]]],
+            dtype=torch.float32,
+        ),
+        "pred_root_logits": torch.ones((1, 4), dtype=torch.float32),
+    }
+    model = DummyModel(costs=[0.05, 0.95, 0.95, 0.95, 0.95, 0.05])
+
+    nodes, edges, details = relation_infer(
+        h,
+        out,
+        model,
+        obj_token=4,
+        rln_token=1,
+        mode="vr-mst",
+        return_details=True,
+    )
+
+    assert nodes[0].shape == (4, 2)
+    np.testing.assert_array_equal(edges[0], np.array([[0, 1], [2, 3]]))
+    np.testing.assert_array_equal(details[0]["component_id"], np.array([0, 0, 1, 1]))
+    assert len(details[0]["root_edges_node_indices"]) == 2
+
+
+def test_vr_mst_requires_root_logits():
+    h, out = make_inputs()
+    model = DummyModel(costs=[0.1, 0.2, 0.9])
+
+    with pytest.raises(ValueError, match="pred_root_logits"):
+        relation_infer(h, out, model, obj_token=3, rln_token=1, mode="vr-mst")

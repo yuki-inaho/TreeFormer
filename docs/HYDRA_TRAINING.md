@@ -71,6 +71,7 @@ For the current stabilization work, prefer independent dense modes before the fu
 
 - `train=seg_only`: segmentation loss only. It treats segmentation as background + one foreground target class, sets detail / heatmap / PAF loss weights to zero, and checkpoints on `val/seg_soft_dice_score`.
 - `train=seg_heatmap`: segmentation plus node heatmap. It keeps graph output and graph losses disabled, adds `W_AUX_HEATMAP=1`, keeps PAF loss at zero, and uses `DATA.AUX_TARGET_MODE=seg_heatmap` so `FastSegSupervisedDataset` generates node heatmaps from the split graph annotation.
+- `train=seg_heatmap_paf`: segmentation plus node heatmap plus PAF / edge-direction supervision. It keeps graph output and graph losses disabled, uses `DATA.AUX_TARGET_MODE=seg_heatmap_paf`, trains the two PAF channels with masked L1, and checkpoints on `val/aux_total_loss`.
 - `train=seg_supervised`: legacy compatibility mode from the earlier stabilization work. It is segmentation plus weak external-mask-derived detail boundary regularization.
 
 The segmentation target must come from the split-local external TPE binary mask directory, `seg/` preferred and `unet/` accepted only as a legacy fallback. The graph-derived raster mask is not used as the segmentation target in these modes.
@@ -81,6 +82,7 @@ Config-only check:
 export TREEFORMER_PRIVATE_DATA=<legacy_treeformer_dataset_root>
 just cfg-private-seg-only
 just cfg-private-seg-heatmap
+just cfg-private-seg-heatmap-paf
 just cfg-private-seg-supervised
 just cfg-private-aux-supervised
 ```
@@ -91,6 +93,7 @@ Short GPU smoke:
 export TREEFORMER_PRIVATE_DATA=<legacy_treeformer_dataset_root>
 just smoke-private-seg-only
 just smoke-private-seg-heatmap
+just smoke-private-seg-heatmap-paf
 just smoke-private-seg-supervised
 just smoke-private-aux-supervised
 ```
@@ -102,6 +105,7 @@ export TREEFORMER_PRIVATE_DATA=<legacy_treeformer_dataset_root>
 just cache-private-fast-seg
 just train-private-seg-only
 just train-private-seg-heatmap
+just train-private-seg-heatmap-paf
 just train-private-seg-supervised
 just train-private-aux-supervised
 ```
@@ -118,6 +122,24 @@ just infer-aux-panels
 
 `infer_aux_panel_treeformer.py` writes one `<sample_id>_aux_panel.png` per image. The panels include input and GT/pred segmentation overlays. The GT segmentation overlay should be read from the same external TPE mask contract as training. When a checkpoint has a fifth aux channel, panels also show `GT detail boundary target` and `Pred detail boundary head`; otherwise derived boundary maps stay hidden unless `--show-derived-detail` is passed explicitly. Heatmap and PAF panels are hidden automatically when their checkpoint loss weights are zero; pass `--show-untrained-maps` only for debugging raw aux channels.
 
+## Virtual-Root Forest Graph Mode
+
+`docs/TreeFormer_virtual_root_forest_formalization.pdf` and `.tex` define the current virtual-root forest contract. The short version is that real nodes are not forced into one MST. A dummy root is added, maximum spanning tree is solved on the augmented graph, and root edges are removed to produce a forest on real nodes.
+
+Use `train=virtual_root` only with graph annotations that provide virtual-root metadata:
+
+- `component_id`: `LongTensor[N]`
+- `component_count`: integer or scalar tensor
+- `root_node_indices`: optional representative real node indices
+- `root_edge_index`: optional augmented root edge index
+- `graph_topology`: `virtual_root_forest_v1`
+
+The legacy reader and fast segmentation reader can preserve this metadata when `DATA.FOREST_METADATA=true`. In `train=virtual_root`, `DATA.STRICT_VIRTUAL_ROOT_METADATA=true` is set, so missing `component_id` is a data error. It must not silently fall back to single-tree MST.
+
+The virtual-root model path adds `MODEL.ROOT_HEAD.ENABLED=true`, which emits `pred_root_logits` with shape `[B, OBJ_TOKEN]`. Pretrained checkpoints that do not contain this head require `checkpoint.pretrained_strict=false`.
+
+For qualitative graph panels, `infer_panel_treeformer.py` accepts `MODE=vr-mst`. JSON output includes optional `postprocessor_mode`, `root_edges_node_indices`, `component_id`, and `augmented_edges` fields for audit.
+
 Operational notes:
 
 - Use `augmentation=disabled` first. Do not use geometric, deformation, crop, rotate, affine, perspective, or elastic DA for this stage.
@@ -125,14 +147,14 @@ Operational notes:
 - `DATA.SEGMENTATION_TARGET_SOURCE=external_mask` is expected for `train=seg_supervised` and `train=aux_supervised`. Missing `seg/<sample_id>.png` or legacy `unet/<sample_id>.png` is a configuration error, not a reason to fall back silently to graph-derived labels.
 - External mask images may be stored as `0/255` PNGs; the loader thresholds them to binary float targets before BCE / Dice / Focal loss, and the loss code rejects targets outside `[0, 1]`.
 - The default segmentation loss uses binary BCE + Dice with Focal disabled. `AUX_SEG_POS_WEIGHT=auto` is capped conservatively so rare foreground does not cause broad positive overprediction.
-- `train=seg_only` and `train=seg_heatmap` use `FastSegSupervisedDataset` by default. `DATA.AUX_TARGET_MODE=seg_only` returns zero-valued unused PAF/heatmap tensors. `DATA.AUX_TARGET_MODE=seg_heatmap` generates only node heatmap targets and leaves PAF tensors zero. For `seg_heatmap`, use `just cache-private-fast-seg-heatmap` or set `TREEFORMER_AUX_TARGET_MODE=seg_heatmap` before `just cache-private-fast-seg` so heatmap targets are precomputed in the repo-external cache.
+- `train=seg_only`, `train=seg_heatmap`, and `train=seg_heatmap_paf` use `FastSegSupervisedDataset` by default. `DATA.AUX_TARGET_MODE=seg_only` returns zero-valued unused PAF/heatmap tensors. `DATA.AUX_TARGET_MODE=seg_heatmap` generates only node heatmap targets and leaves PAF tensors zero. `DATA.AUX_TARGET_MODE=seg_heatmap_paf` generates both node heatmap and PAF / edge-direction targets. For precomputed repo-external cache, use `just cache-private-fast-seg`, `just cache-private-fast-seg-heatmap`, or `just cache-private-fast-seg-heatmap-paf` respectively.
 - `train=seg_supervised` adds a weak optional STDC-style detail boundary auxiliary head as the fifth aux channel. Its target is a multi-scale Laplacian boundary map derived from the external segmentation mask, not a graph edge or PAF. `W_AUX_DETAIL=0.1` keeps it as a light boundary-sharpening regularizer while BCE + Dice segmentation remains the primary objective.
 - For full segmentation-only training, generate repo-external cache first with `just cache-private-fast-seg`, then run `just train-private-seg-supervised`. The full recipe uses `DATA.SEG_CACHE_MODE=disk`, `DATA.NUM_WORKERS=4`, `DATA.PERSISTENT_WORKERS=true`, and `DATA.PREFETCH_FACTOR=2` by default. Set `TREEFORMER_SEG_CACHE_MODE=none` to bypass disk cache.
 - `FastSegSupervisedDataset` defaults to `DATA.SEG_RESIZE_POLICY=legacy_half`, matching the legacy loader behavior that halves the raw image before applying `DATA.MAX_SIZE`. For a raw 800x600 image, `DATA.MAX_SIZE=128` becomes 128x96 and `DATA.MAX_SIZE=512` still caps at 400x300. Use `DATA.SEG_RESIZE_POLICY=full` with `DATA.MAX_SIZE=512` to train at 512x384 from the original image.
 - Aux/seg stages may keep EMA updates enabled, but use `ema.evaluate=false` for validation and best-checkpoint selection because the aux head is newly initialized and `decay=0.9999` changes too slowly during short stages.
 - To initialize a dense stage from a previous Hydra `best.pt`, set `TREEFORMER_PRETRAINED_CHECKPOINT=<best.pt>` and `TREEFORMER_PRETRAINED_KEY=model`. Fork-source checkpoints keep the default `TREEFORMER_PRETRAINED_KEY=net`.
 - RGB input is normalized by the legacy loader with `Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])`, so model input is scaled from `[0, 1]` to `[-1, 1]`.
-- In `train=seg_only` and `train=seg_supervised`, `W_AUX_HEATMAP=0` and `W_AUX_PAF=0`; heatmap and PAF channels are not trained in those stages. In `train=seg_heatmap`, `W_AUX_HEATMAP=1` and `W_AUX_PAF=0`. The aux output layout is segmentation, heatmap, PAF-x, PAF-y, optional detail boundary. `train=aux_supervised` keeps the original 4-channel layout and has `W_AUX_DETAIL=0`.
+- In `train=seg_only` and `train=seg_supervised`, `W_AUX_HEATMAP=0` and `W_AUX_PAF=0`; heatmap and PAF channels are not trained in those stages. In `train=seg_heatmap`, `W_AUX_HEATMAP=1` and `W_AUX_PAF=0`. In `train=seg_heatmap_paf`, `W_AUX_HEATMAP=1` and `W_AUX_PAF=0.25`, so the edge-direction channels are trained together with segmentation and node heatmaps. The aux output layout is segmentation, heatmap, PAF-x, PAF-y, optional detail boundary. `train=aux_supervised` keeps the original 4-channel layout and has `W_AUX_DETAIL=0`.
 - Keep `DATA.BATCH_SIZE=12` and `DATA.MAX_SIZE=128` unless the GPU is shared or memory pressure is observed.
 - Monitor `val/seg_soft_dice_score`, `val/seg_dice_score`, `val/seg_iou`, `val/seg_precision`, `val/seg_recall`, and `val/pred_positive_rate`; do not interpret `val/smd` for this mode because graph validation is intentionally skipped. `val/seg_dice_score` and IoU are hard-threshold metrics at `AUX_SEG_THRESHOLD`; early runs may show zero while soft Dice and loss still improve.
 
@@ -191,7 +213,8 @@ Recommended initial curriculum for a pretrained private legacy TreeFormer-format
 |---|---:|---:|---:|---|---|
 | S0. Segmentation | `train=seg_only augmentation=disabled` | 20 | `1e-4` / `3e-5` | Confirm the RGB encoder can learn the external binary target mask before adding heatmap / PAF / graph objectives. | Continue only if `val/seg_soft_dice_score` or `val/seg_total_loss` improves, then check hard-threshold Dice/IoU and foreground rate for calibration. |
 | H0. Seg + Heatmap | `train=seg_heatmap augmentation=disabled` | 20 | `1e-4` / `3e-5` | Add node heatmap supervision while keeping graph output and PAF disabled. | Continue only if heatmap error declines without collapsing segmentation metrics. |
-| A0. Aux maps | `train=aux_supervised augmentation=disabled` | 20 | `1e-4` / `3e-5` | Add PAF direction supervision after segmentation and heatmap are learnable. | Continue only if `val/aux_total_loss` declines without collapsing segmentation metrics. |
+| P0. Seg + Heatmap + PAF | `train=seg_heatmap_paf augmentation=disabled` | 20 | `1e-4` / `3e-5` | Add edge-direction / PAF supervision after segmentation and heatmap are learnable. | Continue only if `val/aux_total_loss` and `val/paf_masked_l1` decline without collapsing segmentation metrics. |
+| A0. Aux maps | `train=aux_supervised augmentation=disabled` | 20 | `1e-4` / `3e-5` | Legacy 4-channel aux objective for comparison. | Continue only if `val/aux_total_loss` declines without collapsing segmentation metrics. |
 | G0. Graph stabilize | `augmentation=disabled` | 20 | `3e-5` / `1e-5` | Re-enable graph output only after aux maps show learnable supervision. | Continue only if train loss declines and `val/smd` does not spike. |
 | G1. Optical | `augmentation=photometric_opencv` | 80 | `5e-5` / `1.5e-5` | Learn robustness to illumination, noise, blur, and color shifts while graph labels stay unchanged. | Use best checkpoint if `val/smd` improves; otherwise return to previous best. |
 

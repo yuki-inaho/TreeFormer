@@ -45,6 +45,17 @@ def test_parse_run_spec_accepts_explicit_legacy_config(tmp_path: Path):
     assert run.use_distance is True
 
 
+def test_parse_run_spec_accepts_vr_mst_mode(tmp_path: Path):
+    checkpoint = tmp_path / "best.pt"
+    torch.save({"model": {}}, checkpoint)
+
+    run = parse_run_spec(f"VR|{checkpoint}|vr-mst")
+
+    assert run.mode == "vr-mst"
+    assert run.use_mst is True
+    assert run.use_distance is False
+
+
 def test_select_state_dict_prefers_ema_shadow_and_strips_module_prefix():
     checkpoint = {
         "ema": {"shadow": {"module.linear.weight": torch.ones(1, 2)}},
@@ -101,6 +112,29 @@ def test_panel_rendering_and_graph_json_outputs(tmp_path: Path):
     assert panel_path.is_file()
     assert panel.size[0] > 0
     assert '"Prediction"' in graph_path.read_text(encoding="utf-8")
+
+
+def test_save_graph_json_includes_virtual_root_details(tmp_path: Path):
+    graph_path = tmp_path / "sample_pred_graph.json"
+    save_graph_json(
+        graph_path,
+        {
+            "VR": {
+                "nodes": np.array([[0.1, 0.2], [0.3, 0.4]], dtype=np.float32),
+                "edges": np.array([[0, 1]], dtype=np.int64),
+                "details": {
+                    "postprocessor_mode": "vr-mst",
+                    "root_edges_node_indices": np.array([0], dtype=np.int64),
+                    "component_id": np.array([0, 0], dtype=np.int64),
+                },
+            }
+        },
+    )
+
+    payload = graph_path.read_text(encoding="utf-8")
+    assert '"postprocessor_mode": "vr-mst"' in payload
+    assert '"root_edges_node_indices"' in payload
+    assert '"component_id"' in payload
 
 
 def test_discover_images_sorts_supported_images(tmp_path: Path):

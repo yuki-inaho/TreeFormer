@@ -20,6 +20,7 @@ import torchvision.transforms.functional as TF
 from skimage import exposure
 import networkx as nx
 import cv2
+from treeformer_train.virtual_root import load_forest_metadata
 
 def find_segments_v2(start_node, node_collections, branching_nodes, end_nodes):
     segments = []
@@ -137,30 +138,45 @@ def generate_heatmap(normalized_kpts, image_size, sigma):
         heatmap = np.maximum(heatmap, gaussian)
     return heatmap
 ########################################################################################################################
+def _datapoint_field(datapoint, name):
+    if isinstance(datapoint, dict):
+        return datapoint[name]
+    return getattr(datapoint, name)
+
+
 # detr-gnn-dataset
-def load_detr_dataset(tgt_data_path):
+def load_detr_dataset(tgt_data_path, *, strict_virtual_root_metadata=False):
     path_list = []
     for file in os.listdir(tgt_data_path):
         path_list.append(file)
 
     list_DETR_points_left_up = []
     list_DETR_node_collections = []
+    list_forest_metadata = []
     ids = path_list
 
     for id in ids:
         datapoint = torch.load(tgt_data_path + '/' + id, weights_only=False)
-        DETR_points_left_up = datapoint.list_DETR_points_left_up
-        DETR_node_collections = datapoint.DETR_node_collections
+        DETR_points_left_up = torch.as_tensor(_datapoint_field(datapoint, "list_DETR_points_left_up"), dtype=torch.float32)
+        DETR_node_collections = torch.as_tensor(_datapoint_field(datapoint, "DETR_node_collections"), dtype=torch.long)
+        forest_metadata = load_forest_metadata(
+            datapoint,
+            nodes=DETR_points_left_up,
+            edges=DETR_node_collections,
+            strict_virtual_root=bool(strict_virtual_root_metadata),
+        )
 
         list_DETR_points_left_up.append(DETR_points_left_up)
         list_DETR_node_collections.append(DETR_node_collections)
-    return ids, (list_DETR_points_left_up, list_DETR_node_collections)
+        list_forest_metadata.append(forest_metadata)
+    return ids, (list_DETR_points_left_up, list_DETR_node_collections, list_forest_metadata)
 
 #########################################################################################################
 class LoadCNNDataset(Dataset):
     def __init__(self, parent_path, max_size=1000,
                  max_change_light_rate=0.3, is_train=True, is_rotate=False, sample_transform=None,
-                 segmentation_target_source="auto"):
+                 segmentation_target_source="auto", return_forest_metadata=False,
+                 strict_virtual_root_metadata=False):
         self.parent_path = parent_path
         self.tgt_data_path = os.path.join(parent_path, "data")
         self.img_path = os.path.join(parent_path, "img")
@@ -169,10 +185,14 @@ class LoadCNNDataset(Dataset):
         self.segmentation_mask_paths = [self.seg_path, self.unet_path]
         self.file_list = self.processed_file_names
 
-        ids1, (list_DETR_points_left_up, list_DETR_node_collections) = load_detr_dataset(self.tgt_data_path)
+        ids1, (list_DETR_points_left_up, list_DETR_node_collections, list_forest_metadata) = load_detr_dataset(
+            self.tgt_data_path,
+            strict_virtual_root_metadata=bool(strict_virtual_root_metadata),
+        )
         self.ids1 = ids1
         self.list_DETR_points_left_up = list_DETR_points_left_up
         self.list_DETR_node_collections = list_DETR_node_collections
+        self.list_forest_metadata = list_forest_metadata
 
         self.max_size = max_size
 
@@ -180,6 +200,9 @@ class LoadCNNDataset(Dataset):
         self.is_train = is_train
         self.is_rotate = is_rotate
         self.sample_transform = sample_transform
+        self.return_forest_metadata = bool(return_forest_metadata)
+        if self.return_forest_metadata and self.is_rotate:
+            raise ValueError("forest metadata cannot be returned when legacy rotation may remove or reorder nodes")
         self.segmentation_target_source = str(segmentation_target_source or "auto").lower()
         allowed_segmentation_sources = {"auto", "external_mask", "graph"}
         if self.segmentation_target_source not in allowed_segmentation_sources:
@@ -628,6 +651,7 @@ class LoadCNNDataset(Dataset):
         label_img_name0 = label_img_name.split(".")[0]
         list_DETR_points_left_up_idx = self.list_DETR_points_left_up[idx]
         list_DETR_node_collections_idx = self.list_DETR_node_collections[idx]
+        forest_metadata_idx = self.list_forest_metadata[idx]
 
         feature_img_name = label_img_name
         plt_img = plt.imread(os.path.join(self.img_path, feature_img_name)).astype(np.float32)
@@ -746,16 +770,26 @@ class LoadCNNDataset(Dataset):
         if external_unet_idx is not None:
             unet_idx = external_unet_idx
 
-        return (feature_img.contiguous(), label_img_name0,
+        item = (feature_img.contiguous(), label_img_name0,
                 list_DETR_points_left_up, list_DETR_node_collections_idx,
-                PAFs_idx, mask_idx, unet_idx, heatmap_idx,
-                self.ids1[idx])
+                PAFs_idx, mask_idx, unet_idx, heatmap_idx)
+        if self.return_forest_metadata:
+            return item + (forest_metadata_idx, self.ids1[idx])
+        return item + (self.ids1[idx],)
 
 ########################################################################################################################
 def custom_collate_fn(batch):
-    (feature_img, label_img_name0, list_DETR_points_left_up, list_DETR_node_collections,
-     list_PAFs, list_mask, list_unet, list_heatmap,
-     ids1) = zip(*batch)
+    if len(batch[0]) == 10:
+        (feature_img, label_img_name0, list_DETR_points_left_up, list_DETR_node_collections,
+         list_PAFs, list_mask, list_unet, list_heatmap, list_forest_metadata,
+         ids1) = zip(*batch)
+    elif len(batch[0]) == 9:
+        (feature_img, label_img_name0, list_DETR_points_left_up, list_DETR_node_collections,
+         list_PAFs, list_mask, list_unet, list_heatmap,
+         ids1) = zip(*batch)
+        list_forest_metadata = None
+    else:
+        raise ValueError(f"unexpected dataset item length: {len(batch[0])}")
     ACT_1 = 0.9999999
     ACT_0 = 0.0000001
 
@@ -783,9 +817,18 @@ def custom_collate_fn(batch):
     heatmap_concatenated = torch.clamp(heatmap_concatenated, min=ACT_0, max=ACT_1).contiguous()  # 范围限制在[0, 0.99999]
 
     detr_ids = list(ids1)
-    return [images, points_left_up, edges,
-            PAFs_concatenated, mask_concatenated, unet_concatenated, heatmap_concatenated,
-            detr_ids],
+    result = [images, points_left_up, edges,
+              PAFs_concatenated, mask_concatenated, unet_concatenated, heatmap_concatenated]
+    if list_forest_metadata is not None:
+        result.append({
+            "component_id": [item["component_id"] for item in list_forest_metadata],
+            "component_count": [item["component_count"] for item in list_forest_metadata],
+            "root_node_indices": [item["root_node_indices"] for item in list_forest_metadata],
+            "root_edge_index": [item["root_edge_index"] for item in list_forest_metadata],
+            "graph_topology": [item["graph_topology"] for item in list_forest_metadata],
+        })
+    result.append(detr_ids)
+    return result,
 
 ########################################################################################################################
 class obj:
@@ -847,6 +890,8 @@ def build_train_val_datasets(data_config):
     train_sample_transform = build_graph_augmentation(_get_data_attr(data_config, "AUGMENTATION", None))
     legacy_rotate = bool(_get_data_attr(data_config, "LEGACY_ROTATE", True))
     segmentation_target_source = _get_data_attr(data_config, "SEGMENTATION_TARGET_SOURCE", "auto")
+    return_forest_metadata = bool(_get_data_attr(data_config, "FOREST_METADATA", False))
+    strict_virtual_root_metadata = bool(_get_data_attr(data_config, "STRICT_VIRTUAL_ROOT_METADATA", False))
     fast_segmentation_loader = bool(_get_data_attr(data_config, "FAST_SEGMENTATION_LOADER", False))
     if fast_segmentation_loader:
         if train_sample_transform is not None:
@@ -882,6 +927,8 @@ def build_train_val_datasets(data_config):
             heatmap_cutoff=heatmap_cutoff,
             paf_line_thickness=paf_line_thickness,
             paf_mask_thickness=paf_mask_thickness,
+            return_forest_metadata=return_forest_metadata,
+            strict_virtual_root_metadata=strict_virtual_root_metadata,
         )
         val_dataset = FastSegSupervisedDataset(
             val_path,
@@ -897,6 +944,8 @@ def build_train_val_datasets(data_config):
             heatmap_cutoff=heatmap_cutoff,
             paf_line_thickness=paf_line_thickness,
             paf_mask_thickness=paf_mask_thickness,
+            return_forest_metadata=return_forest_metadata,
+            strict_virtual_root_metadata=strict_virtual_root_metadata,
         )
         return (
             _limit_dataset(train_dataset, _get_data_attr(data_config, "TRAIN_LIMIT")),
@@ -904,10 +953,14 @@ def build_train_val_datasets(data_config):
         )
     train_dataset = LoadCNNDataset(parent_path=train_path, max_size=data_config.MAX_SIZE, max_change_light_rate=0.3,
                                    is_train=False, is_rotate=legacy_rotate, sample_transform=train_sample_transform,
-                                   segmentation_target_source=segmentation_target_source)
+                                   segmentation_target_source=segmentation_target_source,
+                                   return_forest_metadata=return_forest_metadata,
+                                   strict_virtual_root_metadata=strict_virtual_root_metadata)
     val_dataset = LoadCNNDataset(parent_path=val_path, max_size=data_config.MAX_SIZE, max_change_light_rate=0.3,
                                  is_train=False, is_rotate=False,
-                                 segmentation_target_source=segmentation_target_source)
+                                 segmentation_target_source=segmentation_target_source,
+                                 return_forest_metadata=return_forest_metadata,
+                                 strict_virtual_root_metadata=strict_virtual_root_metadata)
     return (
         _limit_dataset(train_dataset, _get_data_attr(data_config, "TRAIN_LIMIT")),
         _limit_dataset(val_dataset, _get_data_attr(data_config, "VAL_LIMIT")),

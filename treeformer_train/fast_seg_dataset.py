@@ -15,6 +15,7 @@ from torch.utils.data import Dataset
 
 from .aux_map_targets import AuxMapTargetConfig, make_aux_map_target_config, make_aux_map_targets
 from .detail_targets import make_stdc_detail_boundary_target
+from .virtual_root import load_forest_metadata
 
 
 IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp")
@@ -28,11 +29,23 @@ class FastSegSample:
     mask_path: Path
 
 
-def _load_graph_annotation(path: Path) -> tuple[torch.Tensor, torch.Tensor]:
+def _load_graph_annotation(path: Path, *, strict_virtual_root_metadata: bool = False) -> tuple[torch.Tensor, torch.Tensor, dict[str, Any]]:
     datapoint = torch.load(path, map_location="cpu", weights_only=False)
-    nodes = torch.as_tensor(datapoint.list_DETR_points_left_up, dtype=torch.float32)
-    edges = torch.as_tensor(datapoint.DETR_node_collections, dtype=torch.long)
-    return nodes, edges
+    if isinstance(datapoint, dict):
+        raw_nodes = datapoint["list_DETR_points_left_up"]
+        raw_edges = datapoint["DETR_node_collections"]
+    else:
+        raw_nodes = datapoint.list_DETR_points_left_up
+        raw_edges = datapoint.DETR_node_collections
+    nodes = torch.as_tensor(raw_nodes, dtype=torch.float32)
+    edges = torch.as_tensor(raw_edges, dtype=torch.long)
+    metadata = load_forest_metadata(
+        datapoint,
+        nodes=nodes,
+        edges=edges,
+        strict_virtual_root=bool(strict_virtual_root_metadata),
+    )
+    return nodes, edges, metadata
 
 
 def _find_existing_path(directory: Path, sample_id: str) -> Path | None:
@@ -155,6 +168,7 @@ def build_fast_seg_cache(
     heatmap_cutoff: float = 0.01,
     paf_line_thickness: int = 2,
     paf_mask_thickness: int = 6,
+    strict_virtual_root_metadata: bool = False,
     overwrite: bool = False,
 ) -> dict[str, int]:
     samples = discover_fast_seg_samples(split_root)
@@ -201,7 +215,10 @@ def build_fast_seg_cache(
             scales=detail_scales,
             support_kernel_size=detail_support_kernel_size,
         ).squeeze(0).squeeze(0)
-        nodes, edges = _load_graph_annotation(sample.data_path)
+        nodes, edges, metadata = _load_graph_annotation(
+            sample.data_path,
+            strict_virtual_root_metadata=bool(strict_virtual_root_metadata),
+        )
         pafs, paf_mask, heatmap = make_aux_map_targets(
             nodes,
             edges,
@@ -218,6 +235,7 @@ def build_fast_seg_cache(
             "paf": pafs,
             "paf_mask": paf_mask,
             "heatmap": heatmap,
+            "forest_metadata": metadata,
             "detail_config": detail_config,
             "max_size": int(max_size),
         }
@@ -247,6 +265,8 @@ class FastSegSupervisedDataset(Dataset):
         heatmap_cutoff: float = 0.01,
         paf_line_thickness: int = 2,
         paf_mask_thickness: int = 6,
+        return_forest_metadata: bool = False,
+        strict_virtual_root_metadata: bool = False,
     ) -> None:
         self.split_root = Path(split_root)
         self.max_size = int(max_size)
@@ -258,6 +278,8 @@ class FastSegSupervisedDataset(Dataset):
         if self.cache_mode == "disk" and self.cache_dir is None:
             raise ValueError("cache_dir is required when cache_mode='disk'")
         self.detail_threshold = float(detail_threshold)
+        self.return_forest_metadata = bool(return_forest_metadata)
+        self.strict_virtual_root_metadata = bool(strict_virtual_root_metadata)
         self.detail_scales = tuple(int(item) for item in detail_scales)
         self.detail_support_kernel_size = int(detail_support_kernel_size)
         self.resize_policy = str(resize_policy).lower()
@@ -307,6 +329,7 @@ class FastSegSupervisedDataset(Dataset):
         torch.Tensor | None,
         torch.Tensor | None,
         torch.Tensor | None,
+        dict[str, Any],
     ]:
         cache_path = self._cache_path(sample)
         if not cache_path.exists():
@@ -324,9 +347,11 @@ class FastSegSupervisedDataset(Dataset):
             payload.get("paf", None).float() if payload.get("paf", None) is not None else None,
             payload.get("paf_mask", None).bool() if payload.get("paf_mask", None) is not None else None,
             payload.get("heatmap", None).float() if payload.get("heatmap", None) is not None else None,
+            payload.get("forest_metadata")
+            or load_forest_metadata(payload, nodes=payload["nodes"], edges=payload["edges"], strict_virtual_root=False),
         )
 
-    def _build_sample(self, sample: FastSegSample) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    def _build_sample(self, sample: FastSegSample) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, dict[str, Any]]:
         image, segmentation = _prepare_image_and_mask(
             sample.image_path,
             sample.mask_path,
@@ -339,17 +364,20 @@ class FastSegSupervisedDataset(Dataset):
             scales=self.detail_scales,
             support_kernel_size=self.detail_support_kernel_size,
         ).squeeze(0).squeeze(0)
-        nodes, edges = _load_graph_annotation(sample.data_path)
-        return image, segmentation, detail.contiguous(), nodes, edges
+        nodes, edges, metadata = _load_graph_annotation(
+            sample.data_path,
+            strict_virtual_root_metadata=self.strict_virtual_root_metadata,
+        )
+        return image, segmentation, detail.contiguous(), nodes, edges, metadata
 
     def __getitem__(self, index: int) -> tuple[Any, ...]:
         if index in self._memory_cache:
             return self._memory_cache[index]
         sample = self.samples[index]
         if self.cache_mode == "disk":
-            image, segmentation, detail, nodes, edges, cached_pafs, cached_paf_mask, cached_heatmap = self._load_from_disk_cache(sample)
+            image, segmentation, detail, nodes, edges, cached_pafs, cached_paf_mask, cached_heatmap, metadata = self._load_from_disk_cache(sample)
         else:
-            image, segmentation, detail, nodes, edges = self._build_sample(sample)
+            image, segmentation, detail, nodes, edges, metadata = self._build_sample(sample)
             cached_pafs = None
             cached_paf_mask = None
             cached_heatmap = None
@@ -375,8 +403,16 @@ class FastSegSupervisedDataset(Dataset):
             paf_mask,
             segmentation.contiguous(),
             heatmap,
-            sample.data_path.name,
         )
+        if self.return_forest_metadata:
+            item = item + (
+                metadata,
+                sample.data_path.name,
+            )
+        else:
+            item = item + (
+            sample.data_path.name,
+            )
         if self.cache_mode == "memory":
             self._memory_cache[index] = item
         return item
@@ -401,6 +437,7 @@ def main() -> None:
     parser.add_argument("--heatmap-cutoff", type=float, default=0.01)
     parser.add_argument("--paf-line-thickness", type=int, default=2)
     parser.add_argument("--paf-mask-thickness", type=int, default=6)
+    parser.add_argument("--strict-virtual-root-metadata", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()
 
@@ -422,6 +459,7 @@ def main() -> None:
             heatmap_cutoff=float(args.heatmap_cutoff),
             paf_line_thickness=int(args.paf_line_thickness),
             paf_mask_thickness=int(args.paf_mask_thickness),
+            strict_virtual_root_metadata=bool(args.strict_virtual_root_metadata),
             overwrite=bool(args.overwrite),
         )
         for key, value in stats.items():

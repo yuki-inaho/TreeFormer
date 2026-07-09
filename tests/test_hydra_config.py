@@ -164,3 +164,37 @@ def test_hydra_seg_heatmap_training_adds_node_heatmap_objective():
     assert cfg.MODEL.GRAPH_OUTPUT_ENABLED is False
     assert cfg.MODEL.AUX_HEAD.OUT_CHANNELS == 5
     assert cfg.checkpoint.metric_name == "val/seg_soft_dice_score"
+
+
+def test_hydra_seg_heatmap_paf_training_adds_edge_direction_objective():
+    with initialize_config_dir(version_base="1.3", config_dir=str(CONF_DIR)):
+        cfg = compose(config_name="config", overrides=["train=seg_heatmap_paf"])
+
+    assert cfg.TRAIN.MODE == "aux_supervised"
+    assert cfg.TRAIN.SKIP_GRAPH_OUTPUT is True
+    assert cfg.TRAIN.W_AUX_SEG == 1.0
+    assert cfg.TRAIN.W_AUX_HEATMAP == 1.0
+    assert cfg.TRAIN.W_AUX_PAF == 0.25
+    assert cfg.DATA.AUX_TARGET_MODE == "seg_heatmap_paf"
+    assert cfg.MODEL.GRAPH_OUTPUT_ENABLED is False
+    assert cfg.MODEL.AUX_HEAD.OUT_CHANNELS == 5
+    assert cfg.checkpoint.metric_name == "val/aux_total_loss"
+    assert cfg.checkpoint.mode == "min"
+
+
+def test_hydra_virtual_root_config_composes():
+    with initialize_config_dir(version_base="1.3", config_dir=str(CONF_DIR)):
+        cfg = compose(config_name="config", overrides=["train=virtual_root"])
+
+    assert cfg.TRAIN.MODE == "graph"
+    assert cfg.TRAIN.VIRTUAL_ROOT is True
+    assert cfg.TRAIN.POSTPROCESSOR_MODE == "vr-mst"
+    assert "edges_virtual_root" in cfg.TRAIN.LOSSES
+    assert "root" in cfg.TRAIN.LOSSES
+    assert cfg.DATA.FOREST_METADATA is True
+    assert cfg.DATA.STRICT_VIRTUAL_ROOT_METADATA is True
+    assert cfg.MODEL.ROOT_HEAD.ENABLED is True
+
+    legacy = make_legacy_config(cfg)
+    assert legacy.TRAIN.VIRTUAL_ROOT is True
+    assert legacy.MODEL.ROOT_HEAD.ENABLED is True

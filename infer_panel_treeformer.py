@@ -37,7 +37,7 @@ class RunSpec:
 
     @property
     def use_mst(self) -> bool:
-        return self.mode in {"mst", "mst-dist"}
+        return self.mode in {"mst", "mst-dist", "vr-mst"}
 
     @property
     def use_distance(self) -> bool:
@@ -57,8 +57,8 @@ def parse_run_spec(spec: str) -> RunSpec:
         )
     if not label:
         raise argparse.ArgumentTypeError("run label must not be empty")
-    if mode not in {"raw", "mst", "mst-dist"}:
-        raise argparse.ArgumentTypeError("run mode must be one of: raw, mst, mst-dist")
+    if mode not in {"raw", "mst", "mst-dist", "vr-mst"}:
+        raise argparse.ArgumentTypeError("run mode must be one of: raw, mst, mst-dist, vr-mst")
     checkpoint_path = Path(checkpoint)
     if not checkpoint_path.is_file():
         raise argparse.ArgumentTypeError(f"checkpoint not found: {checkpoint_path}")
@@ -187,13 +187,13 @@ def run_inference(
     run: RunSpec,
     nms: bool,
     distance_weight: float,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, dict[str, Any] | None]:
     from inference_treeformer import relation_infer
 
     with torch.inference_mode():
         images = [tensor.to(device, non_blocking=True)]
         h, out = model(images)
-        pred_nodes, pred_edges = relation_infer(
+        result = relation_infer(
             h.detach(),
             out,
             model,
@@ -201,11 +201,17 @@ def run_inference(
             config.MODEL.DECODER.RLN_TOKEN,
             nms=nms,
             map_=False,
-            mst=run.use_mst,
-            use_distance=run.use_distance,
+            mode=run.mode,
             distance_weight=distance_weight,
+            return_details=run.mode == "vr-mst",
         )
-    return tensor_to_numpy_2d(pred_nodes[0]), edges_to_numpy(pred_edges[0])
+    if len(result) == 3:
+        pred_nodes, pred_edges, details = result
+        detail = details[0]
+    else:
+        pred_nodes, pred_edges = result
+        detail = None
+    return tensor_to_numpy_2d(pred_nodes[0]), edges_to_numpy(pred_edges[0]), detail
 
 
 def tensor_to_numpy_2d(nodes: torch.Tensor | np.ndarray | Iterable[Iterable[float]]) -> np.ndarray:
@@ -437,13 +443,26 @@ def load_legacy_pt(path: Path) -> tuple[np.ndarray, np.ndarray] | None:
         return None
 
 
-def save_graph_json(path: Path, predictions: Mapping[str, tuple[np.ndarray, np.ndarray]]) -> None:
+def save_graph_json(path: Path, predictions: Mapping[str, Any]) -> None:
     payload = {}
-    for label, (nodes, edges) in predictions.items():
+    for label, prediction in predictions.items():
+        if isinstance(prediction, Mapping):
+            nodes = prediction["nodes"]
+            edges = prediction["edges"]
+            details = prediction.get("details")
+        else:
+            nodes, edges = prediction
+            details = None
         payload[label] = {
             "nodes_xy_normalized": tensor_to_numpy_2d(nodes).round(6).tolist(),
             "edges_node_indices": edges_to_numpy(edges).astype(int).tolist(),
         }
+        if isinstance(details, Mapping):
+            payload[label]["postprocessor_mode"] = details.get("postprocessor_mode")
+            for key in ("root_edges_node_indices", "component_id", "augmented_edges"):
+                value = details.get(key)
+                if value is not None:
+                    payload[label][key] = np.asarray(value).astype(int).tolist()
     with path.open("w", encoding="utf-8") as handle:
         json.dump(payload, handle, ensure_ascii=False, indent=2)
 
@@ -464,7 +483,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         type=parse_run_spec,
         required=True,
-        help="Run spec: 'LABEL|CHECKPOINT|MODE' or 'LABEL|CONFIG|CHECKPOINT|MODE'. MODE is raw, mst, or mst-dist.",
+        help="Run spec: 'LABEL|CHECKPOINT|MODE' or 'LABEL|CONFIG|CHECKPOINT|MODE'. MODE is raw, mst, mst-dist, or vr-mst.",
     )
     parser.add_argument("--weights", default="auto", choices=("auto", "ema", "model"), help="Checkpoint weights to load")
     parser.add_argument("--legacy-key", default="net", help="Legacy checkpoint state_dict key")
@@ -535,7 +554,7 @@ def main() -> None:
     for index, image_path in enumerate(image_paths, start=1):
         original_image, tensor = load_image_for_model(image_path, max_size=args.max_size)
         panels = [add_label(original_image, "Input image")]
-        predictions: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+        predictions: dict[str, Any] = {}
 
         if not args.no_gt:
             gt = try_load_ground_truth(image_path, gt_dir, image_size=original_image.size)
@@ -555,7 +574,7 @@ def main() -> None:
                 )
 
         for run in args.run:
-            nodes, edges = run_inference(
+            nodes, edges, details = run_inference(
                 model=models[run.label],
                 config=configs[run.label],
                 tensor=tensor,
@@ -564,7 +583,7 @@ def main() -> None:
                 nms=bool(args.nms),
                 distance_weight=float(args.distance_weight),
             )
-            predictions[run.label] = (nodes, edges)
+            predictions[run.label] = {"nodes": nodes, "edges": edges, "details": details}
             panels.append(
                 draw_graph_overlay(
                     original_image,

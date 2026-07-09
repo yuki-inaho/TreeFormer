@@ -10,6 +10,8 @@ from scipy.sparse.csgraph import minimum_spanning_tree
 import torch.distributed as dist
 from scipy.sparse import find
 
+from treeformer_train.virtual_root import build_cross_component_edge_labels, root_mil_loss
+
 INFTY_COST = 1e+5
 MIN_TEST = 1e-24
 MAX_TEST = 1 - 1e-4
@@ -193,9 +195,88 @@ class SetCriterion(nn.Module):
                             'cards': config.TRAIN.W_CARD,
                             'nodes': config.TRAIN.W_NODE,
                             'edges': config.TRAIN.W_EDGE,
+                            'edges_virtual_root': getattr(config.TRAIN, "W_EDGE", 1.0),
+                            'root': getattr(config.TRAIN, "W_ROOT", 1.0),
                             }
+        self.virtual_root_enabled = bool(getattr(config.TRAIN, "VIRTUAL_ROOT", False))
+        self.root_cardinality_weight = float(getattr(config.TRAIN, "W_ROOT_CARDINALITY", 0.05))
         self.use_mst_train = args.use_mst_train
         self.use_gnn = args.use_gnn
+
+    @staticmethod
+    def _remap_edges_to_matched_order(edges, target_indices, device):
+        mapping = {int(target_id.item()): rank for rank, target_id in enumerate(target_indices.detach().cpu())}
+        remapped = []
+        for start, end in edges.detach().cpu().reshape(-1, 2).tolist():
+            if int(start) in mapping and int(end) in mapping:
+                remapped.append(sorted((mapping[int(start)], mapping[int(end)])))
+        if not remapped:
+            return torch.zeros((0, 2), dtype=torch.long, device=device)
+        return torch.tensor(remapped, dtype=torch.long, device=device)
+
+    def _relation_features_for_pairs(self, h, batch_id, matched_token_indices, pairs):
+        object_token = h[..., :self.obj_token, :]
+        rearranged_object_token = object_token[batch_id, matched_token_indices, :]
+        if self.rln_token > 0:
+            relation_token = h[..., self.obj_token:self.rln_token + self.obj_token, :]
+            return torch.cat(
+                (
+                    rearranged_object_token[pairs[:, 0], :],
+                    rearranged_object_token[pairs[:, 1], :],
+                    relation_token[batch_id, ...].repeat(pairs.shape[0], 1),
+                ),
+                1,
+            )
+        return torch.cat(
+            (
+                rearranged_object_token[pairs[:, 0], :],
+                rearranged_object_token[pairs[:, 1], :],
+            ),
+            1,
+        )
+
+    def loss_root_mil(self, outputs, target, indices):
+        if "pred_root_logits" not in outputs:
+            raise ValueError("virtual-root root loss requires pred_root_logits")
+        if "component_id" not in target:
+            raise ValueError("virtual-root root loss requires component_id")
+
+        losses = []
+        for batch_id, (src_indices, tgt_indices) in enumerate(indices):
+            if src_indices.numel() == 0:
+                continue
+            component_id = target["component_id"][batch_id].to(outputs["pred_root_logits"].device)[tgt_indices]
+            root_logits = outputs["pred_root_logits"][batch_id, src_indices]
+            losses.append(root_mil_loss(root_logits, component_id, cardinality_weight=self.root_cardinality_weight))
+        if not losses:
+            return outputs["pred_root_logits"].sum() * 0.0
+        return torch.stack(losses).mean()
+
+    def loss_edges_virtual_root_sfs(self, h, target_nodes, target_edges, target_component_id, indices):
+        if target_component_id is None:
+            raise ValueError("virtual-root edge loss requires component_id")
+
+        relation_features = []
+        edge_labels = []
+        for batch_id, (nodes, edges, component_id, (src_indices, tgt_indices)) in enumerate(
+            zip(target_nodes, target_edges, target_component_id, indices)
+        ):
+            node_count = int(tgt_indices.numel())
+            if node_count <= 1:
+                continue
+            positive_edges = self._remap_edges_to_matched_order(edges, tgt_indices, h.device)
+            matched_component_id = component_id.to(device=h.device, dtype=torch.long)[tgt_indices]
+            pairs, labels = build_cross_component_edge_labels(node_count, positive_edges, matched_component_id)
+            if pairs.numel() == 0:
+                continue
+            relation_features.append(self._relation_features_for_pairs(h, batch_id, src_indices, pairs))
+            edge_labels.append(labels.to(h.device))
+
+        if not relation_features:
+            return h.sum() * 0.0
+        relation_pred = _unwrap_module(self.net).relation_embed(torch.cat(relation_features, 0))
+        labels = torch.cat(edge_labels, 0)
+        return F.cross_entropy(relation_pred, labels, reduction="mean")
 
     def loss_class(self, outputs, indices):
         """Compute the losses related to the bounding boxes, the L1 regression loss and the GIoU loss
@@ -7804,7 +7885,16 @@ class SetCriterion(nn.Module):
         losses['nodes'] = self.loss_nodes(out['pred_nodes'][..., :2], target['nodes'], indices)
         losses['boxes'] = self.loss_boxes(out['pred_nodes'], target['nodes'], indices)
 
-        if self.use_mst_train and not self.use_gnn:
+        if "edges_virtual_root" in self.losses:
+            losses['edges_virtual_root'] = self.loss_edges_virtual_root_sfs(
+                h,
+                target['nodes'],
+                target['edges'],
+                target.get('component_id'),
+                indices,
+            )
+            losses['edges'] = losses['edges_virtual_root']
+        elif self.use_mst_train and not self.use_gnn:
             # losses['edges'] = self.loss_edges_final_final_final1_GPU(h, target['nodes'], target['edges'], indices, epoch=epoch,
             #                                           max_epoch=max_epoch, last_epoch=last_epoch)
             losses['edges'] = self.loss_edges_final_final_final1_GPU_change_infinity_less_mem(h, target['nodes'],
@@ -7822,6 +7912,8 @@ class SetCriterion(nn.Module):
             # losses['edges'] = self.loss_edges(h, target['nodes'], target['edges'], indices)
             losses['edges'] = self.loss_edges_infinity_6(h, target['nodes'], target['edges'], indices)
 
+        if "root" in self.losses:
+            losses['root'] = self.loss_root_mil(out, target, indices)
 
         losses['cards'] = self.loss_cardinality(out['pred_logits'], indices)
         losses['total'] = sum([losses[key] * self.weight_dict[key] for key in self.losses])

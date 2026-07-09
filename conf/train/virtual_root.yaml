@@ -1,0 +1,40 @@
+# @package _global_
+TRAIN:
+  MODE: graph
+  SKIP_GRAPH_OUTPUT: false
+  POSTPROCESSOR_MODE: vr-mst
+  VIRTUAL_ROOT: true
+  EPOCHS: 1
+  LR: 1e-4
+  LR_BACKBONE: 3e-5
+  WEIGHT_DECAY: 1e-4
+  LR_DROP: 100
+  CLIP_MAX_NORM: 20.0
+  SAVE_PATH: ${oc.env:TREEFORMER_TRAIN_OUTPUT,${oc.env:TREEFORMER_ASSETS_ROOT,../TreeFormer_assets}/trained_weights_hydra_virtual_root}
+  VAL_INTERVAL: 1
+  SAVE_VAL: false
+  LOSSES: ["boxes", "class", "cards", "nodes", "edges_virtual_root", "root"]
+  W_BBOX: 2.0
+  W_CLASS: 3.0
+  W_CARD: 1.0
+  W_NODE: 5.0
+  W_EDGE: 4.0
+  W_ROOT: 1.0
+  W_CROSS_EDGE: 1.0
+  VR_ROOT_PENALTY: 0.0
+DATA:
+  FOREST_METADATA: true
+  STRICT_VIRTUAL_ROOT_METADATA: true
+MODEL:
+  GRAPH_OUTPUT_ENABLED: true
+  ROOT_HEAD:
+    ENABLED: true
+    HIDDEN_DIM: ${MODEL.DECODER.HIDDEN_DIM}
+    NUM_LAYERS: 2
+checkpoint:
+  metric_name: val/smd
+  mode: min
+  pretrained_strict: false
+log:
+  exp_name: hydra_virtual_root_smoke
+  message: Hydra-managed TreeFormer virtual-root forest graph training

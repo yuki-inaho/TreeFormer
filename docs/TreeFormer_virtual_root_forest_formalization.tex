@@ -1,0 +1,949 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=22mm]{geometry}
+\usepackage{xeCJK}
+\usepackage{fontspec}
+\setmainfont{Noto Serif}
+\setsansfont{Noto Sans}
+\setmonofont{DejaVu Sans Mono}
+\setCJKmainfont{Noto Serif CJK JP}
+\setCJKsansfont{Noto Sans CJK JP}
+\setCJKmonofont{Noto Sans Mono CJK JP}
+\usepackage{amsmath,amssymb,amsfonts,mathtools,bm,amsthm}
+\usepackage{booktabs,longtable,tabularx,array,multirow}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{xurl}
+\usepackage{hyperref}
+\usepackage{cleveref}
+\usepackage{titlesec}
+\usepackage{fancyhdr}
+\setlength{\headheight}{14pt}
+\usepackage{microtype}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,shapes.geometric,fit,calc}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!55!black,
+  citecolor=blue!55!black,
+  urlcolor=blue!55!black,
+  pdftitle={TreeFormer Virtual-Root Forest Formalization},
+  pdfauthor={OpenAI GPT-5.5 Pro}
+}
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{TreeFormer virtual-root forest formalization}
+\rhead{2026-07-09}
+\cfoot{\thepage}
+\setlength{\parskip}{0.55em}
+\setlength{\parindent}{0em}
+\renewcommand{\arraystretch}{1.22}
+\setlist[itemize]{leftmargin=1.7em,itemsep=0.2em,topsep=0.2em}
+\setlist[enumerate]{leftmargin=1.9em,itemsep=0.2em,topsep=0.2em}
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+\newtheorem{definition}{定義}
+\newtheorem{proposition}{命題}
+\newtheorem{remark}{注意}
+\newtheorem{assumption}{仮定}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\one}{\mathbf{1}}
+\newcommand{\calF}{\mathcal{F}}
+\newcommand{\calT}{\mathcal{T}}
+\newcommand{\calV}{\mathcal{V}}
+\newcommand{\calE}{\mathcal{E}}
+\newcommand{\calC}{\mathcal{C}}
+\newcommand{\argmax}{\operatorname*{arg\,max}}
+\newcommand{\argmin}{\operatorname*{arg\,min}}
+\newcommand{\diag}{\operatorname{diag}}
+\newcommand{\tr}{\operatorname{tr}}
+\newcommand{\softmax}{\operatorname{softmax}}
+\newcommand{\sigmoid}{\operatorname{sigmoid}}
+\newcommand{\KL}{\operatorname{KL}}
+\sloppy
+\emergencystretch=2em
+
+\title{TreeFormer系の非連結植物骨格推定に向けた\\仮想ルートノード付き森林制約の定式化}
+\author{理論整理・実装設計メモ}
+\date{2026年7月9日}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+本資料は、TreeFormer/PlantPose系の「画像から植物骨格グラフを推定する」問題を、単一連結木ではなく、画像内に複数の独立した木が存在し得る\textbf{森林推定問題}として定式化し直す。中心となる提案は、実ノード集合に\textbf{仮想ルートノード}、すなわち dummy root / super-root を追加し、拡張グラフ上で全域木を解いた後、仮想ルートに接続するedgeを取り除くことで実ノード上の森林を得る方法である。この定式化により、単一MSTが本来非連結である複数物体間にbridge edgeを作る問題を回避できる。さらに、TreeFormerのSelective Feature Suppression (SFS)を、仮想ルート付きMST/SFS、rooted forest CRF、またはperturbed spanning forest lossへ拡張するための数式、損失関数、推論手順、実装契約、検証項目を自己完結的に整理する。
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+\section{文書の目的と結論}
+\subsection{目的}
+本資料の目的は、以下の問いに対して、他の実装者が迷わず設計・実装・検証できる程度に、自己完結した定式化を与えることである。
+\begin{enumerate}
+  \item TreeFormerの単一MST制約を、画像内に複数の独立した木が存在する場合へどう拡張するか。
+  \item 仮想ルートノードを追加すると、なぜ森林が得られるのか。
+  \item root edge、実edge、component数、cross-component negativeをどのようにloss化するか。
+  \item GNN的なedge BCE/CEだけでは不十分な理由と、上位互換に近いstructured loss候補をどう整理するか。
+  \item ONNX/OpenVINO等のデプロイを見据えたとき、モデル出力とグラフ後処理の境界をどう切るか。
+\end{enumerate}
+
+\subsection{主要結論}
+結論は以下である。
+\begin{enumerate}
+  \item 単一木を仮定したMSTは、画像中に複数の別個体がある場合、本来存在しないcomponent間bridge edgeを必ず1本以上作る。これは問題設定と矛盾する。
+  \item 実ノード集合$V$に仮想ルート$0$を加えた拡張グラフ$G^+=(V\cup\{0\},E^+)$上で全域木$T^+$を解き、root edgeを削除すると、実ノード上に森林$F$が得られる。
+  \item $T^+$における仮想ルートの次数$\deg_{T^+}(0)$は、root edge削除後の森林のcomponent数と一致する。
+  \item したがって、非連結物体対応の最小拡張は、TreeFormerのMST/SFSを\textbf{Virtual-Root MST/SFS}へ置き換えることである。
+  \item 研究的には、仮想ルート付き有向全域木CRF、すなわちRooted Forest CRFを使うと、root候補を周辺化しつつ森林全体の尤度を直接最大化できる。
+  \item GNNや単純なedge BCEはedge score改善には有効だが、非連結性、無閉路性、component数、must-not-connect制約を直接保証しない。主lossではなく補助lossと見るべきである。
+\end{enumerate}
+
+\subsection{推奨する実装順}
+短期実装では以下を推奨する。
+\begin{equation}
+\boxed{
+\mathcal{L}_{total}
+=\lambda_{node}\mathcal{L}_{node}
++\lambda_{edge}\mathcal{L}_{edge}
++\lambda_{root}\mathcal{L}_{root}
++\lambda_{cross}\mathcal{L}_{cross}
++\lambda_{vr}\mathcal{L}_{VR\text{-}SFS}
+}
+\label{eq:recommended_loss}
+\end{equation}
+ここで$\mathcal{L}_{VR\text{-}SFS}$は、仮想ルート付きMSTに基づくSFS lossである。
+
+中期研究実装では、以下を比較対象にする。
+\begin{align}
+  \mathcal{L}_{VR\text{-}CRF}
+  &= -\log P(F^*\mid I), \\
+  \mathcal{L}_{PerturbedForest}
+  &= \text{partial Fenchel-Young / perturb-and-MSF loss}, \\
+  \mathcal{L}_{OT\text{-}Graph}
+  &= \text{graph-level OT loss as auxiliary loss}.
+\end{align}
+
+\section{背景: TreeFormer/PlantPoseの単一MST制約}
+TreeFormerは、画像から植物骨格を任意トポロジの木グラフとして推定するため、学習型graph generatorとMST等の伝統的グラフアルゴリズムを組み合わせる。論文では、tree graph generationはedge集合全体に対する制約を満たす必要があるため組合せ最適化になると説明されている。また、単純な後処理MSTだけでは、学習時のgeneratorが制約を見ないため出力が不自然になり得る。そこで、MST projectionを訓練ループに入れ、SFS layerにより非微分なMSTの効果を微分可能に模倣する、という設計を採っている\cite{treeformer2025,plantpose2026}。
+
+PlantPoseはTreeFormerの拡張版として、同じSFS/MSTの思想をより大規模・汎用的な植物骨格推定へ拡張している。PlantPoseの説明でも、MST projectionとSFSにより、unconstrained graph generatorのedge予測をtree constraintへ整合させることが中核とされている\cite{plantpose2026}。
+
+ただし、既存のTreeFormer/PlantPoseの中核仮定は「対象グラフは単一連結木である」という点にある。画像内に2本の別個の木が写っている場合、この仮定は破綻する。単一MSTは全nodeを1つの連結componentにするため、物理的に別個体である2本の木の間にもbridge edgeを作ってしまう。
+
+\section{単一MSTが破綻する条件}
+\subsection{単一木制約}
+通常の木制約は、node集合$V$に対してedge集合$E$が以下を満たすことを要求する。
+\begin{align}
+  |E| &= |V|-1, \\
+  (V,E) &\text{ is connected}, \\
+  (V,E) &\text{ is acyclic}.
+\end{align}
+この3条件は同値的に「$G=(V,E)$がspanning treeである」ことを意味する。
+
+\subsection{複数物体に対する矛盾}
+画像中に2本の別個の木$G_1=(V_1,E_1)$と$G_2=(V_2,E_2)$があるとする。真の構造は
+\begin{equation}
+  V=V_1\cup V_2,
+  \qquad
+  E=E_1\cup E_2,
+  \qquad
+  V_1\cap V_2=\emptyset
+\end{equation}
+であり、$G$は2 componentの森林である。したがって
+\begin{equation}
+  |E|=(|V_1|-1)+(|V_2|-1)=|V|-2.
+\end{equation}
+一方、単一MSTは$|V|-1$本のedgeを要求する。差分の1本は、必ず$V_1$と$V_2$を接続するbridge edgeになる。
+
+\begin{equation}
+  \underbrace{|V|-1}_{\text{single MST}}
+  -
+  \underbrace{(|V|-2)}_{\text{2-component forest}}
+  =1.
+\end{equation}
+
+この1本は真のedgeではない。したがって、複数物体を許す場合、制約はtreeではなくforestに変更する必要がある。
+
+\section{仮想ルート付き森林定式化}
+\subsection{基本定義}
+\begin{definition}[実ノード集合]
+画像から検出される実ノード集合を
+\begin{equation}
+  V=\{1,2,\ldots,N\}
+\end{equation}
+とする。最大候補数$K$を持つDETR/RelationFormer型モデルでは、推論後に有効node集合$A\subseteq\{1,\ldots,K\}$を選び、ここでは$|A|=N$として議論する。
+\end{definition}
+
+\begin{definition}[仮想ルート付き拡張ノード集合]
+仮想ルートノード$0$を追加し、
+\begin{equation}
+  V^+ = V\cup\{0\}
+\end{equation}
+と定義する。$0$は画像中の物理的な点ではなく、複数componentを束ねるための計算上のdummy rootである。
+\end{definition}
+
+\begin{definition}[拡張edge集合]
+実ノード間edge候補を$E\subseteq\{(i,j):i,j\in V, i<j\}$とする。仮想ルートから各実ノードへのroot edgeを追加し、
+\begin{equation}
+  E^+ = E \cup E_0,
+  \qquad
+  E_0=\{(0,i):i\in V\}
+\end{equation}
+とする。
+\end{definition}
+
+\subsection{仮想ルート付きMSTから森林への射影}
+拡張グラフ$G^+=(V^+,E^+)$上で全域木$T^+$を解く。
+\begin{equation}
+  T^* = \argmax_{T^+\in\mathcal{T}(G^+)} S(T^+),
+  \label{eq:augmented_mst}
+\end{equation}
+ここで$\mathcal{T}(G^+)$は$G^+$上の全域木集合である。スコアは後述する。得られた$T^+$からroot edgeを除去し、実ノード上の予測森林を得る。
+\begin{equation}
+  F = T^+ \setminus E_0.
+  \label{eq:remove_root_edges}
+\end{equation}
+
+\begin{proposition}[仮想ルート除去により森林が得られる]
+$T^+$を$V^+$上の任意の木とする。$F=T^+\setminus E_0$は実ノード集合$V$上の森林である。
+\end{proposition}
+
+\begin{proof}
+$T^+$は木なので閉路を持たない。$F$は$T^+$の部分グラフであるから、$F$も閉路を持たない。閉路を持たない無向グラフは森林である。したがって$F$は$V$上の森林である。
+\end{proof}
+
+\begin{proposition}[仮想ルート次数とcomponent数]
+$T^+$を$V^+$上の木、$F=T^+\setminus E_0$とする。このとき$F$の連結成分数は、$T^+$における仮想ルートの次数と一致する。
+\begin{equation}
+  \kappa(F)=\deg_{T^+}(0).
+  \label{eq:root_degree_component}
+\end{equation}
+\end{proposition}
+
+\begin{proof}
+木$T^+$から頂点$0$とそれに接続する$\deg_{T^+}(0)$本のedgeを削除する。木から次数$d$の頂点を削除すると、残りのグラフは$d$個の連結成分に分かれる。ここで$d=\deg_{T^+}(0)$である。残りのグラフは$F$なので、$\kappa(F)=d$である。
+\end{proof}
+
+\begin{proposition}[森林から仮想ルート付き木への拡張]
+$F=(V,E_F)$を$C$個の連結成分$C_1,\ldots,C_C$を持つ森林とする。各成分から代表node$r_c\in C_c$を1つ選び、
+\begin{equation}
+  T^+ = F\cup \{(0,r_c):c=1,\ldots,C\}
+\end{equation}
+と定義すると、$T^+$は$V^+$上の木である。
+\end{proposition}
+
+\begin{proof}
+$F$は$C$個の木の非交和である。各木に対して仮想ルート$0$から1本ずつedgeを追加すると、全componentは$0$を介して連結になる。追加edgeは各componentに1本だけなので閉路は生じない。よって$T^+$は連結かつ無閉路、すなわち木である。
+\end{proof}
+
+以上により、\textbf{仮想ルート付き木}と\textbf{root付き森林}は、root edgeを除去する操作を通じて自然に対応する。
+
+\subsection{概念図}
+\begin{center}
+\begin{tikzpicture}[node distance=1.15cm, every node/.style={font=\small}]
+  \node[circle,draw,fill=black!8] (r) at (0,2.1) {$0$};
+  \node[circle,draw] (a1) at (-2.2,0.9) {$1$};
+  \node[circle,draw] (a2) at (-3.2,-0.1) {$2$};
+  \node[circle,draw] (a3) at (-1.2,-0.2) {$3$};
+  \node[circle,draw] (b1) at (1.2,0.8) {$4$};
+  \node[circle,draw] (b2) at (2.3,-0.1) {$5$};
+  \node[circle,draw] (b3) at (0.6,-0.4) {$6$};
+  \draw[thick] (a1)--(a2);
+  \draw[thick] (a1)--(a3);
+  \draw[thick] (b1)--(b2);
+  \draw[thick] (b1)--(b3);
+  \draw[thick,dashed,blue!70!black] (r)--(a1);
+  \draw[thick,dashed,blue!70!black] (r)--(b1);
+  \node[align=center] at (0,-1.25) {拡張木$T^+$から青いroot edgeを除去すると、\\左の木と右の木からなる森林$F$が残る。};
+\end{tikzpicture}
+\end{center}
+
+\section{スコア設計}
+\subsection{実edge score}
+モデルのnode token特徴を$h_i\in\R^d$とする。実ノード間のedge logitを
+\begin{equation}
+  s_{ij}=f_{edge}(h_i,h_j,\phi_{ij})
+\end{equation}
+とする。$\phi_{ij}$は相対座標、距離、方向、画像特徴などのpair featureである。無向edgeであれば
+\begin{equation}
+  s_{ij}=s_{ji}
+\end{equation}
+にするか、双方向スコアを平均する。
+\begin{equation}
+  s_{ij}^{sym}=\frac{1}{2}(s_{i\to j}+s_{j\to i}).
+\end{equation}
+
+\subsection{root edge score}
+仮想ルートから実node$i$へのroot edge scoreを
+\begin{equation}
+  r_i=f_{root}(h_i,\psi_i)
+\end{equation}
+とする。$r_i$は、「node $i$があるcomponentの代表rootとして適切か」を表す。物理的な根元が明確な植物であれば根元らしさ、単にcomponent代表でよい場合はcomponent開始点らしさを学習する。
+
+\subsection{component開始ペナルティ}
+component数を制御するため、root edgeにペナルティ$\lambda\ge 0$を入れる。
+\begin{equation}
+  S(T^+)
+  =
+  \sum_{(i,j)\in T^+,\ i,j\neq 0} s_{ij}
+  +
+  \sum_{(0,i)\in T^+} (r_i-\lambda).
+  \label{eq:tree_score_lambda}
+\end{equation}
+式\eqref{eq:root_degree_component}より、$\lambda$はcomponent数に対する線形ペナルティである。
+\begin{equation}
+  S(T^+)
+  =
+  \sum_{(i,j)\in F} s_{ij}
+  +
+  \sum_{c=1}^{\kappa(F)} r_{\rho_c}
+  -
+  \lambda\kappa(F),
+\end{equation}
+ここで$\rho_c$はcomponent $c$のrootとして選ばれたnodeである。
+
+直観は以下である。$\lambda$を大きくするとcomponent開始が高コストになり、component数は少なくなりやすい。反対に、$\lambda$を小さくするとcomponent開始が低コストになり、component数は多くなりやすい。ただし、実際の最適解は実edge scoreとroot scoreの相対値にも依存するため、$\lambda$はvalidationで較正する。
+
+\section{教師データのケース分け}
+\subsection{ケースA: component IDがある}
+各GT node $u\in V^*$にcomponent label $c(u)\in\{1,\ldots,C^*\}$がある場合が最も扱いやすい。この場合、cross-component negativeを明示的に作れる。
+\begin{equation}
+  c(u)\neq c(v)\quad\Rightarrow\quad (u,v)\notin E^*.
+\end{equation}
+
+\subsection{ケースB: component IDはないがGT edgeがある}
+GT edge集合$E^*$があれば、GT graphのconnected componentsを計算することでcomponent IDを復元できる。
+\begin{equation}
+  \{C_1^*,\ldots,C_{C^*}^*\}=\operatorname{CC}(V^*,E^*).
+\end{equation}
+この場合も、異なるGT connected component間をcross-component negativeとして扱える。
+
+\subsection{ケースC: nodeだけありedgeがない}
+nodeだけの場合、森林構造の教師はない。この場合、仮想ルート付き森林lossは直接使えない。代替として、距離・方向・外観に基づく擬似edge、annotated scribble、またはteacher modelのpseudo graphを作る必要がある。
+
+\subsection{ケースD: 遮蔽による見かけ上の非連結}
+重要なのは、\textbf{別個体による非連結}と\textbf{遮蔽・検出漏れによる見かけ上の非連結}を分けることである。
+
+別個体ならforestが正しい。
+\begin{equation}
+  \text{multiple physical instances}\quad\Rightarrow\quad \text{forest}
+\end{equation}
+遮蔽された1本の木なら、latent edgeまたはlatent nodeを考えるべきである。
+\begin{equation}
+  \text{occluded single instance}\quad\Rightarrow\quad \text{latent connection or hidden node}
+\end{equation}
+この区別をアノテーション仕様で定めないと、モデルは「切るべき非連結」と「補完すべき非連結」を混同する。
+
+\section{node matchingとedge labelの定義}
+DETR系モデルでは、予測node候補は固定長$K$で出る。GT node集合$V^*$との対応はHungarian matchingで決める。
+\begin{equation}
+  \pi:V^*\to\{1,\ldots,K\}.
+\end{equation}
+対応済み予測node集合を
+\begin{equation}
+  A=\pi(V^*)
+\end{equation}
+とする。GT edge labelは
+\begin{equation}
+  y_{ij}^*=\one\left[\exists (u,v)\in E^*\ \mathrm{s.t.}\ i=\pi(u),\ j=\pi(v)\right]
+\end{equation}
+である。component labelは
+\begin{equation}
+  g_i^*=c(u)\quad\text{if}\quad i=\pi(u)
+\end{equation}
+と定義する。異なるcomponentのpair集合を
+\begin{equation}
+  \mathcal{P}_{cross}=\{(i,j):i,j\in A,\ g_i^*\neq g_j^*\}
+\end{equation}
+とする。同一componentだが直接edgeではないpairも存在するため、
+\begin{equation}
+  g_i^*=g_j^* \not\Rightarrow y_{ij}^*=1
+\end{equation}
+に注意する。
+
+\section{基本loss群}
+\subsection{node loss}
+node検出lossは既存TreeFormer/RelationFormer型を維持する。
+\begin{equation}
+  \mathcal{L}_{node}=\mathcal{L}_{cls}+\lambda_{coord}\mathcal{L}_{coord}+\lambda_{box}\mathcal{L}_{box}.
+\end{equation}
+植物骨格nodeだけを扱うなら、box lossを省略し、座標lossを中心にしてよい。
+
+\subsection{edge BCE/CE}
+実edgeに対する基本lossは、class imbalanceを考慮したBCEまたはCEである。
+\begin{equation}
+  \mathcal{L}_{edge}
+  =
+  -\frac{1}{|\mathcal{P}|}
+  \sum_{(i,j)\in\mathcal{P}}
+  \left[
+    \alpha y_{ij}^*\log p_{ij}
+    +(1-y_{ij}^*)\log(1-p_{ij})
+  \right],
+\end{equation}
+ここで$p_{ij}=\sigmoid(s_{ij})$である。$\alpha>1$は正edgeが少ないことへの重みである。
+
+\subsection{cross-component negative loss}
+異なる物体間にbridge edgeを張らないため、cross-component negativeを明示的に入れる。
+\begin{equation}
+  \mathcal{L}_{cross}
+  =
+  -\frac{1}{|\mathcal{P}_{cross}|}
+  \sum_{(i,j)\in\mathcal{P}_{cross}}
+  \log(1-p_{ij}).
+  \label{eq:cross_loss}
+\end{equation}
+このlossは、仮想ルート方式において特に重要である。root edgeが正しく較正されていない初期学習では、別component間の実edge scoreが高くなり、単一木的なbridgeが選ばれやすいためである。
+
+\subsection{root loss: 代表rootが指定される場合}
+各componentに正解root node $r_c^*$がある場合、root edgeの分類lossを使う。
+\begin{equation}
+  y_{0i}^*=\one[i=\pi(r_c^*)\ \text{for some}\ c].
+\end{equation}
+\begin{equation}
+  \mathcal{L}_{root}^{BCE}
+  =
+  -\frac{1}{|A|}
+  \sum_{i\in A}
+  \left[
+    y_{0i}^*\log p_{0i}+(1-y_{0i}^*)\log(1-p_{0i})
+  \right].
+\end{equation}
+ここで$p_{0i}=\sigmoid(r_i)$である。
+
+\subsection{root loss: 代表rootが任意の場合}
+component内のどのnodeをrootにしてもよい場合、特定nodeを正解rootに固定すると不必要なバイアスになる。この場合、multiple-instance learning (MIL)型のlossを使う。
+\begin{equation}
+  \mathcal{L}_{root}^{MIL}
+  =
+  -\sum_{c=1}^{C^*}
+  \log\left(
+    1-\prod_{i\in A_c}(1-p_{0i})
+  \right),
+  \label{eq:root_mil}
+\end{equation}
+ここで$A_c=\pi(V_c^*)$である。これは「各component内で少なくとも1つroot edgeが高くなればよい」というlossである。
+
+ただし、これだけではcomponent内で複数rootが高くなる可能性がある。そこでcount penaltyを追加する。
+\begin{equation}
+  \mathcal{L}_{root}^{count}
+  =
+  \sum_{c=1}^{C^*}
+  \left(\sum_{i\in A_c}p_{0i}-1\right)^2.
+  \label{eq:root_count_per_component}
+\end{equation}
+最終的なroot lossは
+\begin{equation}
+  \mathcal{L}_{root}
+  =
+  \mathcal{L}_{root}^{MIL}
+  +\beta\mathcal{L}_{root}^{count}
+\end{equation}
+とする。
+
+\subsection{global component count loss}
+画像ごとのcomponent数$C^*$がわかる場合、root probabilityの総和にも制約をかける。
+\begin{equation}
+  \mathcal{L}_{global\text{-}count}
+  =
+  \left(\sum_{i\in A}p_{0i}-C^*\right)^2.
+\end{equation}
+別headでcomponent countを分類する場合は、
+\begin{equation}
+  \mathcal{L}_{count}=\operatorname{CE}(\hat{C},C^*)
+\end{equation}
+を追加する。
+
+\section{Virtual-Root MST/SFS loss}
+\subsection{拡張スコア行列}
+対応済みnode集合$A$に仮想root $0$を加える。拡張スコア行列$S^+$を
+\begin{equation}
+  S^+_{ij}=\begin{cases}
+    s_{ij}, & i,j\in A,
+    \\
+    r_j-\lambda, & i=0,\ j\in A,
+    \\
+    r_i-\lambda, & j=0,\ i\in A,
+    \\
+    -\infty, & i=j
+  \end{cases}
+\end{equation}
+と定義する。無向MSTとして解く場合、$S^+$は対称にする。
+
+最大全域木を
+\begin{equation}
+  T^{+}_{proj}=\argmax_{T^+\in\mathcal{T}(G^+)}\sum_{(i,j)\in T^+}S^+_{ij}
+\end{equation}
+とする。実装でminimum spanning treeを使う場合は、costを
+\begin{equation}
+  C^+_{ij}=-S^+_{ij}
+\end{equation}
+としてMSTを解けばよい。
+
+\subsection{projection mask}
+MST結果からmaskを作る。
+\begin{equation}
+  m^{proj}_{ij}=\one[(i,j)\in T^{+}_{proj}],
+  \qquad i,j\in A\cup\{0\}.
+\end{equation}
+実edgeに対するmaskは$m^{proj}_{ij}$、root edgeに対するmaskは$m^{proj}_{0i}$である。
+
+\subsection{SFSの一般形}
+SFSは、MST projectionで選ばれなかったedgeのedge logitを抑制し、選ばれたedgeのnon-edge logitを抑制する操作として定義できる。2-class logitを
+\begin{equation}
+  \bm{z}_{ij}=(z_{ij}^{edge},z_{ij}^{non})
+\end{equation}
+とする。projection maskに基づいて、
+\begin{equation}
+  \tilde{z}_{ij}^{edge}=z_{ij}^{edge}-\gamma\one[m^{proj}_{ij}=0],
+\end{equation}
+\begin{equation}
+  \tilde{z}_{ij}^{non}=z_{ij}^{non}-\gamma\one[m^{proj}_{ij}=1]
+\end{equation}
+とする。$\gamma>0$はsuppression strengthである。root edgeにも同じ操作を適用する。
+
+この定義はTreeFormer/PlantPoseのSFSの思想と同じである。PlantPoseの説明では、MST projectionが追加すべきedgeではnon-edge featureを抑制し、削除すべきedgeではedge featureを抑制することで、MST構造に整合するedge existenceを出しつつ勾配を流す、とされている\cite{plantpose2026}。
+
+\subsection{Virtual-Root SFS loss}
+SFS後のlogitに対して、拡張GT label$y^+_{ij}$を定義する。
+\begin{equation}
+  y^+_{ij}=\begin{cases}
+    y^*_{ij}, & i,j\in A, \\
+    y^*_{0i}, & i=0,\ j=i\in A, \\
+    0, & \text{otherwise}.
+  \end{cases}
+\end{equation}
+root代表が任意の場合、$y^*_{0i}$は固定せず、MIL root lossを併用する。この場合、$\mathcal{L}_{VR\text{-}SFS}$は実edgeにのみ適用してもよい。
+
+固定rootがある場合のVR-SFS lossは、
+\begin{equation}
+  \mathcal{L}_{VR\text{-}SFS}
+  =
+  \frac{1}{|\mathcal{P}^+|}
+  \sum_{(i,j)\in\mathcal{P}^+}
+  \operatorname{CE}(\softmax(\tilde{\bm{z}}_{ij}),y^+_{ij}).
+  \label{eq:vr_sfs_loss}
+\end{equation}
+$\mathcal{P}^+$は実edge候補とroot edge候補の和集合である。
+
+\begin{remark}
+VR-SFSは「MSTを完全に微分可能化する」方法ではない。非微分なMSTの結果を使って、logitまたはfeatureを選択的に抑制し、edge lossのforward値を構造制約に寄せる方法である。厳密なstructured probabilistic lossが必要なら、次節のRooted Forest CRFを使う。
+\end{remark}
+
+\section{Rooted Forest CRF: より上位互換に近い定式化}
+\subsection{有向仮想ルートグラフ}
+より理論的に整理するなら、仮想ルート$0$を根とする有向全域木、すなわちarborescenceとして扱う。各実nodeはちょうど1つのincoming arcを持ち、root $0$から全nodeへ到達可能である。root arc $0\to i$はcomponent開始を表し、実arc $i\to j$はcomponent内の親子関係を表す。
+
+スコアを
+\begin{equation}
+  \theta_{ij}=\begin{cases}
+    s_{ij}^{dir}, & i,j\in V,
+    \\
+    r_j-\lambda, & i=0,\ j\in V,
+    \\
+    -\infty, & j=0
+  \end{cases}
+\end{equation}
+とする。重みは
+\begin{equation}
+  w_{ij}=\exp(\theta_{ij}/\tau)
+\end{equation}
+である。$\tau>0$はtemperatureである。
+
+\subsection{Matrix-Tree partition}
+有向arborescenceに対するpartition functionはMatrix-Tree Theoremで計算できる。Koo et al.は、directed spanning treeを含むstructured predictionで、KirchhoffのMatrix-Tree Theoremを用いてpartition functionとmarginalを計算する枠組みを示している\cite{koo2007}。
+
+ここでは、arc $i\to j$のweightを$w_{ij}$とし、incoming Laplacianを
+\begin{equation}
+  L_{jj}=\sum_{i\neq j} w_{ij},
+  \qquad
+  L_{ij}=-w_{ij}\quad(i\neq j)
+\end{equation}
+と定義する。root $0$に対応する行・列を削除した小行列を$L_{\bar{0}}$とすると、
+\begin{equation}
+  Z(\theta)=\det L_{\bar{0}}
+  =
+  \sum_{T^+\in\mathcal{A}_0(G^+)}
+  \prod_{(i\to j)\in T^+}w_{ij}
+\end{equation}
+である。$\mathcal{A}_0(G^+)$はroot $0$から外向きに向いた有向全域木集合である。
+
+\subsection{root固定のNLL}
+正解の拡張有向木$T^{+*}$が一意に定まる場合、negative log-likelihoodは
+\begin{equation}
+  \mathcal{L}_{VR\text{-}CRF}^{fixed}
+  =
+  -\sum_{(i\to j)\in T^{+*}}\log w_{ij}
+  +\log Z(\theta).
+  \label{eq:crf_fixed}
+\end{equation}
+これはedgeを独立に扱うBCEではなく、全てのrooted forest候補に対する正規化を持つstructured lossである。
+
+\subsection{root未指定の場合の周辺化}
+component rootが任意でよい場合、正解森林$F^*$に整合する全てのroot選択を周辺化する。component $C_c^*$ごとにroot候補$\rho_c\in C_c^*$を選び、各component内のGT edgeを$\rho_c$から外向きに向ける。このようにして得られる拡張有向木集合を
+\begin{equation}
+  \mathcal{A}(F^*)
+\end{equation}
+とする。
+
+正解森林の周辺尤度は
+\begin{equation}
+  P(F^*\mid I)
+  =
+  \frac{Z_{F^*}(\theta)}{Z(\theta)},
+\end{equation}
+ただし
+\begin{equation}
+  Z_{F^*}(\theta)
+  =
+  \sum_{T^+\in\mathcal{A}(F^*)}
+  \prod_{(i\to j)\in T^+}w_{ij}.
+\end{equation}
+よってlossは
+\begin{equation}
+  \mathcal{L}_{VR\text{-}CRF}^{marginal}
+  =
+  -\log Z_{F^*}(\theta)+\log Z(\theta).
+  \label{eq:crf_marginal}
+\end{equation}
+
+この形式は、root選択に任意性がある植物骨格に適している。特定nodeをrootに固定せず、「各componentに1つroot edgeがある」という構造だけを学習できる。
+
+\subsection{Matrix-Forestとの関係}
+無向グラフに対しては、rooted forestsをLaplacianの行列式で数えるMatrix-Forest型の定理が知られている。例えば、rooted forestsをcomponent数で数える生成関数がgraph Laplacianを用いて表現できることが示されている\cite{bernaklivans2015}。本資料の仮想ルートCRFは、実装上は有向Matrix-Tree Theoremを使う方が扱いやすいが、理論的にはMatrix-Forest型の定式化と同じ問題族に属する。
+
+\section{Perturbed Spanning Forest loss}
+MST/MSFは離散最適化であり、通常の意味では微分不能である。近年は、離散optimizerに摂動を加えて微分可能な近似を作る方法が研究されている。Differentiable Clustering with Perturbed Spanning Forestsは、minimum-weight spanning forestsに確率的摂動を入れ、end-to-end trainableなclustering operationとして使う方法を提案している\cite{stewart2023}。また、black-box combinatorial solverへ効率的なbackward passを与える研究もある\cite{vlastelica2020}。
+
+TreeFormerの仮想ルート問題に応用するなら、スコア$\theta$にノイズ$\epsilon$を足し、
+\begin{equation}
+  Y_\epsilon(\theta)=\operatorname{MSF}(\theta+\epsilon)
+\end{equation}
+を複数回計算する。期待projection
+\begin{equation}
+  \bar{Y}(\theta)=\E_\epsilon[Y_\epsilon(\theta)]
+\end{equation}
+を使い、GT forest indicator $Y^*$との距離を取る。
+\begin{equation}
+  \mathcal{L}_{PerturbedForest}
+  =\|\bar{Y}(\theta)-Y^*\|_2^2
+  \quad\text{or}\quad
+  \mathcal{L}_{FY}(\theta;Y^*).
+\end{equation}
+
+この方法は、仮想ルート付きMST/SFSより研究実装寄りである。利点は、MST/MSFそのものの選択を勾配近似に含められることである。欠点は、実装・計算量・再現性管理が難しくなることである。
+
+\section{GNN/adjacency lossとの関係}
+\subsection{GNN lossでできること}
+GNN的なlossやadjacency reconstruction lossは、node embeddingを改善し、edge classifierを強くするために有用である。例えば、
+\begin{equation}
+  \hat{A}_{ij}=\sigmoid(g(z_i,z_j))
+\end{equation}
+として、
+\begin{equation}
+  \mathcal{L}_{adj}=\operatorname{BCE}(\hat{A},A^*)
+\end{equation}
+を追加する。message passingにより、局所pairだけでなく周辺nodeの文脈を使える。
+
+\subsection{GNN lossでできないこと}
+しかし、GNN lossは通常、以下を直接保証しない。
+\begin{align}
+  \text{acyclicity},\quad
+  \text{component count},\quad
+  \text{exact edge cardinality},\quad
+  \text{no cross-component bridge}.
+\end{align}
+最終出力がpairwise adjacency probabilityであれば、threshold後にcycle、孤立component、余分なbridgeが出る可能性は残る。したがって、GNNは主lossではなく、edge scoreの品質を上げる補助lossとして使うのが妥当である。
+
+\subsection{推奨する併用}
+実用上は以下がよい。
+\begin{equation}
+  \mathcal{L}_{total}
+  =
+  \mathcal{L}_{node}
+  +\lambda_{edge}\mathcal{L}_{edge}
+  +\lambda_{gnn}\mathcal{L}_{adj/GNN}
+  +\lambda_{root}\mathcal{L}_{root}
+  +\lambda_{cross}\mathcal{L}_{cross}
+  +\lambda_{vr}\mathcal{L}_{VR\text{-}SFS}.
+\end{equation}
+GNNでedge scoreを改善し、仮想ルートMST/SFSで構造制約をかける、という分担である。
+
+\section{推論アルゴリズム}
+\subsection{component数が未知の場合}
+component数が未知の場合は、root penalty $\lambda$を使って拡張MSTを解く。
+
+\textbf{入力:} active node集合$A$、実edge score$s_{ij}$、root score$r_i$、penalty $\lambda$。
+\textbf{出力:} 予測森林$F$、root edge集合$R$、component ID。
+
+\begin{enumerate}
+  \item 拡張node集合$A^+=A\cup\{0\}$を作る。
+  \item 実edge $(i,j)$にscore $s_{ij}$を与える。
+  \item root edge $(0,i)$にscore $r_i-\lambda$を与える。
+  \item 最大全域木$T^+$を解く。実装でMSTを使う場合はcost $-score$を使う。
+  \item root edge集合$R=T^+\cap E_0$を取り出す。
+  \item $F=T^+\setminus R$を予測森林とする。
+  \item $F$のconnected componentsを計算し、component IDを付与する。
+\end{enumerate}
+
+このとき、component数は$|R|=\deg_{T^+}(0)$である。
+
+\subsection{component数が既知の場合}
+画像ごとにcomponent数$C$が既知なら、root degreeを$C$に近づける。実装方法は3つある。
+
+\begin{longtable}{p{0.23\linewidth}p{0.43\linewidth}p{0.25\linewidth}}
+\toprule
+方法 & 内容 & 推奨度 \\
+\midrule
+$\lambda$探索 & $\lambda$を変えながら拡張MSTを解き、$\deg(0)=C$になる解を探す & 実装容易。ただし必ず一致する保証はない \\
+Kruskal停止 & 実node間でmaximum spanning forestを作り、edge数が$N-C$になったら停止。各componentのrootは最大$r_i$で選ぶ & root scoreの影響を分離してよければ安定 \\
+degree-constrained MST & $\deg(0)=C$を制約に入れて最適化する & 厳密だが実装が重い \\
+\bottomrule
+\end{longtable}
+
+短期実装では、$\lambda$探索またはKruskal停止で十分である。root scoreをcomponent partitionにも影響させたいなら、$\lambda$探索を優先する。
+
+\subsection{node数も未知の場合}
+実運用ではnode数$N$も未知である。モデルは最大$K$個の候補を出す。
+\begin{equation}
+  q_i=P(\text{node }i\text{ exists}).
+\end{equation}
+active node集合は、
+\begin{equation}
+  A=\{i:q_i>\tau_{node}\}
+\end{equation}
+またはtop-$N_{max}$で決める。仮想ルートMSTはactive node集合上でのみ解く。低confidence nodeを含めると、root edgeやbridge edgeが不安定になるため、node thresholdとroot penaltyは同時にvalidationする必要がある。
+
+\section{ONNX/OpenVINOを見据えた出力契約}
+仮想ルート方式は、モデル本体を固定テンソル出力に保てる。推奨出力は以下である。
+\begin{align}
+  \texttt{node\_scores} &\in \R^{B\times K}, \\
+  \texttt{node\_xy}     &\in \R^{B\times K\times 2}, \\
+  \texttt{edge\_scores} &\in \R^{B\times P}, \quad P=K(K-1)/2, \\
+  \texttt{root\_scores} &\in \R^{B\times K}, \\
+  \texttt{count\_logits}&\in \R^{B\times(C_{max}+1)}\quad\text{optional}.
+\end{align}
+
+edge pair tableは定数として外部に保持する。
+\begin{equation}
+  \texttt{edge\_pairs}\in \mathbb{N}^{P\times 2}.
+\end{equation}
+ONNX/OpenVINOモデルはgraph objectを出さない。仮想ルートMST、root edge削除、component ID付与、MST後の枝刈り、可視化、JSON変換はモデル外後処理にする。
+
+この分離により、モデルはデプロイしやすい固定テンソル推論に集中できる。離散グラフ処理はC++/Python側の小さな後処理として実装する。
+
+\section{実装仕様案}
+\subsection{forward出力}
+モデルforwardは以下を返す。
+\begin{verbatim}
+{
+  "node_logits":  FloatTensor[B, K, 2],
+  "node_xy":      FloatTensor[B, K, 2],
+  "edge_logits": FloatTensor[B, P, 2],
+  "root_logits": FloatTensor[B, K],
+  "count_logits": Optional[FloatTensor[B, Cmax + 1]]
+}
+\end{verbatim}
+
+\subsection{postprocessor出力}
+後処理は以下を返す。
+\begin{verbatim}
+{
+  "nodes":          FloatTensor[N, 2],
+  "edges":          LongTensor[M, 2],
+  "root_edges":     LongTensor[C, 2],   # (0, node_id)
+  "component_id":   LongTensor[N],
+  "node_scores":    FloatTensor[N],
+  "edge_scores":    FloatTensor[M]
+}
+\end{verbatim}
+ここで$C$は予測component数、$M=N-C$が森林のedge数である。予測後に枝刈りを行う場合、$M\le N-C$になることがあるため、その場合は「木制約を保つ後処理」か「森林から部分森林を許す後処理」かを明示する。
+
+\subsection{loss module入力}
+学習時のloss moduleは以下を受け取る。
+\begin{verbatim}
+pred = {
+  node_logits, node_xy, edge_logits, root_logits, count_logits
+}
+target = {
+  gt_nodes, gt_edges, gt_component_id, optional_gt_roots, optional_count
+}
+match = HungarianMatch(pred.nodes, target.gt_nodes)
+\end{verbatim}
+
+\subsection{実装上の重要パラメータ}
+\begin{longtable}{p{0.18\linewidth}p{0.42\linewidth}p{0.30\linewidth}}
+\toprule
+記号/名前 & 意味 & 推奨する決め方 \\
+\midrule
+$K$ & 最大node候補数 & datasetの99 percentile以上 \\
+$P$ & edge候補数 & 全pairなら$K(K-1)/2$ \\
+$\lambda$ & root edge penalty & validationでtree/forest F1とcomponent errorを見て調整 \\
+$\gamma$ & SFS suppression strength & 既存TreeFormerの設定を初期値にし、sweepする \\
+$\tau_{node}$ & node threshold & node recall重視でやや低めから調整 \\
+$\alpha$ & edge positive weight & positive/negative imbalanceから初期化 \\
+$\lambda_{cross}$ & component間bridge抑制重み & bridge誤検出が多い場合に上げる \\
+\bottomrule
+\end{longtable}
+
+\section{評価指標}
+非連結対応では、通常のnode/edge指標だけでは不十分である。最低限、以下を測る。
+
+\begin{longtable}{p{0.24\linewidth}p{0.61\linewidth}}
+\toprule
+指標 & 意味 \\
+\midrule
+node precision/recall & node検出そのものの品質 \\
+coordinate error & node位置誤差 \\
+edge precision/recall/F1 & 実edgeの分類品質 \\
+component count error & $|\hat{C}-C^*|$ \\
+bridge false positive rate & 異なるGT component間に予測edgeを張った割合 \\
+forest validity rate & 予測graphが無閉路かつ各component内で木になっている割合 \\
+cycle count & 閉路数 \\
+connected component F1 & component分割の一致度 \\
+SMD/TOPO & TreeFormer/PlantPose系の既存評価に合わせた構造類似度 \\
+post-MST edge F1 & 仮想ルートMST後のedge品質 \\
+latency & model推論とpostprocessを分けて測る \\
+\bottomrule
+\end{longtable}
+
+\section{想定される失敗と対処}
+\subsection{root edgeが安すぎる場合}
+root edge penalty $\lambda$が小さすぎる、またはroot scoreが過大な場合、各nodeがrootへ直接つながり、細かく分断されたforestになる。
+\begin{equation}
+  \deg(0)\approx N.
+\end{equation}
+対処は、$\lambda$を上げる、root count lossを強める、root候補をcomponent内で1つに絞るlossを入れることである。
+
+\subsection{root edgeが高すぎる場合}
+$\lambda$が大きすぎる場合、モデルはroot edgeを避け、別component間の実edgeを使って単一木に近づく。
+\begin{equation}
+  \deg(0)\approx 1.
+\end{equation}
+対処は、$\lambda$を下げる、cross-component negative lossを強める、component count lossを追加することである。
+
+\subsection{rootが任意なのに固定root CEを使う場合}
+component rootに物理的意味がない場合、特定nodeをroot正解に固定すると、不要なバイアスが入る。対処はMIL root lossまたはRooted Forest CRFのroot周辺化を使うことである。
+
+\subsection{遮蔽と別個体を混同する場合}
+GT仕様で「遮蔽された1本の木をつなぐべきか、見えている部分だけをforestとして扱うか」を明確化する。評価指標もこれに合わせる。
+
+\section{実装検証用の最小テスト}
+実装時には以下の単体テストを必須にする。
+
+\begin{longtable}{p{0.25\linewidth}p{0.45\linewidth}p{0.22\linewidth}}
+\toprule
+テスト名 & 内容 & 期待結果 \\
+\midrule
+vr-two-trees & 2つの独立した3-node treeに高edge score、component間に低scoreを与える & root edge 2本、実edge 4本、bridge 0本 \\
+root-degree-components & 任意の拡張MSTからroot edgeを削除してcomponent数を数える & component数がroot次数と一致 \\
+lambda-under-split & $\lambda$を極端に小さくする & component数が増える方向に変化 \\
+lambda-over-merge & $\lambda$を極端に大きくする & component数が減る方向に変化 \\
+cross-loss-bridge & component間edge scoreだけを上げる & $\mathcal{L}_{cross}$が増加 \\
+root-mil-any-node & component内の任意1 nodeだけroot scoreを上げる & MIL root lossが低下 \\
+forest-validity & postprocessor出力にcycleがないか検査 & cycle count 0 \\
+onnx-contract & 出力shapeが固定契約を満たすか検査 & node/edge/root score shapeが一致 \\
+\bottomrule
+\end{longtable}
+
+\section{研究候補の比較}
+\begin{longtable}{p{0.19\linewidth}p{0.30\linewidth}p{0.23\linewidth}p{0.18\linewidth}}
+\toprule
+方式 & 長所 & 短所 & 推奨 \\
+\midrule
+Virtual-Root MST/SFS & 既存TreeFormerに最も近く、実装が軽い。component数もroot次数で読める。 & root penalty較正が必要。CRFほど確率的に綺麗ではない。 & 短期本命 \\
+Rooted Forest CRF & 森林全体の尤度を直接最大化でき、root周辺化も可能。 & determinant計算、数値安定性、実装がやや重い。 & 中期本命 \\
+Perturbed MSF & 離散forest solver自体への勾配近似が可能。弱教師ありにも拡張しやすい。 & Monte Carlo計算、再現性、実装複雑性が課題。 & 研究比較 \\
+GNN + edge BCE & 実装が簡単でedge score改善に有効。 & forest制約を保証しない。bridge/cycle対策が弱い。 & 補助loss \\
+Graph OT/PMFGW & 可変node graph全体の距離を扱える。 & tree/forest制約を直接保証しない。計算量も課題。 & 補助loss \\
+\bottomrule
+\end{longtable}
+
+\section{最終提案}
+本資料の最終提案は、TreeFormerを以下のように拡張することである。
+
+\begin{equation}
+\boxed{
+\text{TreeFormer} + \text{root head} + \text{Virtual-Root MST/SFS} + \text{cross-component loss}
+}
+\end{equation}
+
+具体的には、モデルは固定テンソルとして
+\begin{equation}
+  (\texttt{node\_scores},\texttt{node\_xy},\texttt{edge\_scores},\texttt{root\_scores})
+\end{equation}
+を出す。訓練時は、仮想ルート付きMSTを使ってSFSを行い、root lossとcross-component lossを併用する。推論時は、同じscoreから拡張MSTを解き、root edgeを削除してforestを得る。
+
+この方法は、単一MSTの「必ず全nodeを1本につなぐ」という問題を解消し、画像内に2本以上の別個の木が存在する場合にも自然に対応できる。さらに、出力を固定テンソルに保てるため、ONNX/OpenVINOを見据えたデプロイ設計とも整合する。
+
+\section{補足: 最小実装の疑似手順}
+\subsection{訓練時}
+\begin{enumerate}
+  \item 画像$I$をモデルへ入力する。
+  \item node logits、node xy、edge logits、root logitsを得る。
+  \item Hungarian matchingでGT nodeと予測nodeを対応させる。
+  \item GT edge label、GT component label、cross-component negative pairを作る。
+  \item 対応済みnode集合$A$上に仮想root $0$を追加する。
+  \item 実edge score$s_{ij}$とroot score$r_i-\lambda$で拡張スコア行列$S^+$を作る。
+  \item 最大全域木$T^+$を解く。
+  \item $T^+$からprojection maskを作り、edge/root logitsにSFSを適用する。
+  \item $\mathcal{L}_{node}$、$\mathcal{L}_{edge}$、$\mathcal{L}_{root}$、$\mathcal{L}_{cross}$、$\mathcal{L}_{VR\text{-}SFS}$を合算する。
+  \item backpropagationする。
+\end{enumerate}
+
+\subsection{推論時}
+\begin{enumerate}
+  \item node score thresholdまたはtop-$K'$でactive node集合$A$を決める。
+  \item edge scoreとroot scoreを抽出する。
+  \item root penalty $\lambda$を適用し、拡張グラフ$G^+$を作る。
+  \item 最大全域木$T^+$を解く。
+  \item root edgeを削除し、実ノード上の森林$F$を得る。
+  \item connected componentsを計算し、component IDを付ける。
+  \item 必要に応じて短edge/低confidence edgeの枝刈り、degree-2 node整理、可視化を行う。
+\end{enumerate}
+
+\section{結語}
+仮想ルートノードは、TreeFormerの単一MST制約を非連結な複数木へ拡張するうえで、最も自然で実装可能性の高い定式化である。数学的には、仮想ルート付き全域木とroot付き森林が対応するため、root edgeを除去するだけで実ノード上の森林が得られる。実装上は、既存のMST/SFSを大きく壊さず、root head、root penalty、cross-component lossを追加すればよい。
+
+したがって、次に実装するなら、まずVirtual-Root MST/SFSをbaselineとして構築し、その後、Rooted Forest CRFまたはPerturbed Spanning Forest lossを上位互換候補として比較するのが妥当である。
+
+\newpage
+\begin{thebibliography}{9}
+\bibitem{treeformer2025}
+Xinpeng Liu, Hiroaki Santo, Yosuke Toda, and Fumio Okura.
+\newblock TreeFormer: Single-View Plant Skeleton Estimation via Tree-Constrained Graph Generation.
+\newblock WACV 2025.
+\newblock \url{https://openaccess.thecvf.com/content/WACV2025/papers/Liu_TreeFormer_Single-View_Plant_Skeleton_Estimation_via_Tree-Constrained_Graph_Generation_WACV_2025_paper.pdf}
+
+\bibitem{plantpose2026}
+Xinpeng Liu, Hiroaki Santo, Yosuke Toda, and Fumio Okura.
+\newblock PlantPose: Universal Plant Skeleton Estimation via Tree-constrained Graph Generation.
+\newblock International Journal of Computer Vision, 2026.
+\newblock \url{https://link.springer.com/article/10.1007/s11263-026-02882-4}
+
+\bibitem{koo2007}
+Terry Koo, Amir Globerson, Xavier Carreras, and Michael Collins.
+\newblock Structured Prediction Models via the Matrix-Tree Theorem.
+\newblock EMNLP-CoNLL 2007.
+\newblock \url{https://aclanthology.org/D07-1015.pdf}
+
+\bibitem{bernaklivans2015}
+Olivier Bernardi and Caroline J. Klivans.
+\newblock Directed Rooted Forests in Higher Dimension.
+\newblock \url{https://www.dam.brown.edu/people/cklivans/Forests.pdf}
+
+\bibitem{stewart2023}
+Lawrence Stewart, Francis Bach, Felipe Llinares-López, and Quentin Berthet.
+\newblock Differentiable Clustering with Perturbed Spanning Forests.
+\newblock NeurIPS 2023.
+\newblock \url{https://proceedings.neurips.cc/paper_files/paper/2023/hash/637a456d89289769ac1ab29617ef7213-Abstract-Conference.html}
+
+\bibitem{vlastelica2020}
+Marin Vlastelica, Anselm Paulus, Vít Musil, Georg Martius, and Michal Rolínek.
+\newblock Differentiation of Blackbox Combinatorial Solvers.
+\newblock ICLR 2020.
+\newblock \url{https://openreview.net/forum?id=BkevoJSYPB}
+\end{thebibliography}
+
+\end{document}

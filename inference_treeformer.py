@@ -1,5 +1,5 @@
 import itertools
-from typing import List, Tuple, Union
+from typing import Any, List, Tuple, Union
 
 import networkx as nx
 import numpy as np
@@ -7,9 +7,12 @@ import torch
 import torch.nn.functional as F
 from torchvision.ops import batched_nms
 
+from treeformer_train.virtual_root import compute_virtual_root_forest_edges
+
 
 InferenceReturn = Union[
     Tuple[List[torch.Tensor], List[np.ndarray]],
+    Tuple[List[torch.Tensor], List[np.ndarray], List[dict[str, Any]]],
     Tuple[List[torch.Tensor], List[np.ndarray], List[np.ndarray], List[np.ndarray], List[np.ndarray], List[np.ndarray], List[np.ndarray]],
 ]
 
@@ -144,13 +147,26 @@ def relation_infer(
     mst: bool = False,
     use_distance: bool = False,
     distance_weight: float = 0.5,
+    mode: str | None = None,
+    virtual_root_mst: bool = False,
+    root_penalty: float = 0.0,
+    return_details: bool = False,
 ) -> InferenceReturn:
+    if mode is None:
+        mode = "vr-mst" if virtual_root_mst else ("mst-dist" if mst and use_distance else ("mst" if mst else "raw"))
+    if mode not in {"raw", "mst", "mst-dist", "vr-mst"}:
+        raise ValueError(f"mode must be one of ['raw', 'mst', 'mst-dist', 'vr-mst'], got {mode!r}")
+    mst = mode in {"mst", "mst-dist"}
+    use_distance = mode == "mst-dist"
+    virtual_root_mst = mode == "vr-mst"
+
     valid_token = torch.argmax(out["pred_logits"], -1).detach()
     if nms:
         valid_token = _valid_tokens_after_nms(valid_token, out)
 
     pred_nodes = []
     pred_edges = []
+    pred_details = []
     if map_:
         pred_nodes_boxes = []
         pred_nodes_boxes_score = []
@@ -169,6 +185,16 @@ def relation_infer(
 
         if node_id.numel() <= 1:
             pred_edges.append(np.empty((0, 2), dtype=np.int64))
+            if return_details:
+                pred_details.append(
+                    {
+                        "postprocessor_mode": mode,
+                        "root_edges_node_indices": np.arange(int(node_id.numel()), dtype=np.int64)
+                        if virtual_root_mst
+                        else np.empty((0,), dtype=np.int64),
+                        "component_id": np.arange(int(node_id.numel()), dtype=np.int64),
+                    }
+                )
             if map_:
                 pred_edges_boxes_score.append(np.empty((0,), dtype=np.float32))
                 pred_edges_boxes_class.append(np.empty((0,), dtype=np.int64))
@@ -176,7 +202,33 @@ def relation_infer(
 
         local_pairs, relation_pred = _pair_relation_logits(h, model, batch_id, node_id, obj_token, rln_token)
 
-        if mst:
+        if virtual_root_mst:
+            if "pred_root_logits" not in out:
+                raise ValueError("virtual_root_mst requires pred_root_logits in model output")
+            edge_scores = F.softmax(relation_pred, dim=-1)[:, 1]
+            root_scores = torch.sigmoid(out["pred_root_logits"][batch_id, node_id]).detach()
+            forest = compute_virtual_root_forest_edges(
+                local_pairs,
+                edge_scores,
+                root_scores,
+                root_penalty=float(root_penalty),
+            )
+            selected_edges = forest.real_edges
+            pair_to_index = {
+                tuple(pair.tolist()): idx for idx, pair in enumerate(local_pairs.detach().cpu())
+            }
+            selected_rel = [pair_to_index[tuple(edge.tolist())] for edge in selected_edges if tuple(edge.tolist()) in pair_to_index]
+            pred_rel = torch.tensor(selected_rel, dtype=torch.long, device=relation_pred.device)
+            if return_details:
+                pred_details.append(
+                    {
+                        "postprocessor_mode": mode,
+                        "root_edges_node_indices": forest.root_edges_node_indices,
+                        "component_id": forest.component_id,
+                        "augmented_edges": forest.augmented_edges,
+                    }
+                )
+        elif mst:
             cost_pred_batch = F.softmax(relation_pred, dim=-1)[:, 0]
             if use_distance:
                 cost_pred_batch = _distance_weighted_cost(
@@ -193,8 +245,12 @@ def relation_infer(
         else:
             pred_rel = torch.nonzero(torch.argmax(relation_pred, -1)).squeeze(1)
             selected_edges = local_pairs[pred_rel].detach().cpu().numpy()
+            if return_details:
+                pred_details.append({"postprocessor_mode": mode})
 
         pred_edges.append(selected_edges)
+        if return_details and len(pred_details) < len(pred_edges):
+            pred_details.append({"postprocessor_mode": mode})
 
         if map_:
             pred_edges_boxes_score.append(relation_pred.softmax(-1)[pred_rel, 1].detach().cpu().numpy())
@@ -210,5 +266,8 @@ def relation_infer(
             pred_edges_boxes_score,
             pred_edges_boxes_class,
         )
+
+    if return_details:
+        return pred_nodes, pred_edges, pred_details
 
     return pred_nodes, pred_edges

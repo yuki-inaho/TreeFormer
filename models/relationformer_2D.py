@@ -68,9 +68,19 @@ class RelationFormer(nn.Module):
         self.with_box_refine = config.MODEL.DECODER.WITH_BOX_REFINE
         self.num_classes = config.MODEL.NUM_CLASSES
         self.graph_output_enabled = bool(_get_attr(config.MODEL, "GRAPH_OUTPUT_ENABLED", True))
+        root_head_config = _get_attr(config.MODEL, "ROOT_HEAD", None)
+        self.root_head_enabled = root_head_config is not None and bool(_get_attr(root_head_config, "ENABLED", False))
 
         self.class_embed = nn.Linear(config.MODEL.DECODER.HIDDEN_DIM, 2)
         self.bbox_embed = MLP(config.MODEL.DECODER.HIDDEN_DIM, config.MODEL.DECODER.HIDDEN_DIM, 4, 3)
+        self.root_embed = None
+        if self.root_head_enabled:
+            self.root_embed = MLP(
+                config.MODEL.DECODER.HIDDEN_DIM,
+                int(_get_attr(root_head_config, "HIDDEN_DIM", config.MODEL.DECODER.HIDDEN_DIM)),
+                1,
+                int(_get_attr(root_head_config, "NUM_LAYERS", 2)),
+            )
         
         if config.MODEL.DECODER.RLN_TOKEN > 0:
             self.relation_embed = MLP(config.MODEL.DECODER.HIDDEN_DIM * (2 + config.MODEL.DECODER.RLN_TOKEN),
@@ -241,6 +251,8 @@ class RelationFormer(nn.Module):
         # 2 20 4
 
         out.update({'pred_logits': class_prob, 'pred_nodes': coord_loc})
+        if self.root_embed is not None:
+            out["pred_root_logits"] = self.root_embed(object_token).squeeze(-1)
         return hs, out
 
 

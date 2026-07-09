@@ -11,20 +11,27 @@ from train_mst import build_train_val_datasets, custom_collate_fn
 from treeformer_train.fast_seg_dataset import FastSegSupervisedDataset, build_fast_seg_cache
 
 
-def _write_split(root: Path, split: str, *, count: int = 2) -> Path:
+def _write_split(root: Path, split: str, *, count: int = 2, with_forest_metadata: bool = False) -> Path:
     split_root = root / split
     (split_root / "data").mkdir(parents=True)
     (split_root / "img").mkdir()
     (split_root / "seg").mkdir()
     for index in range(count):
         sample_id = f"sample_{index:02d}"
-        torch.save(
-            SimpleNamespace(
-                list_DETR_points_left_up=torch.tensor([[0.15, 0.15], [0.85, 0.85]], dtype=torch.float32),
-                DETR_node_collections=torch.tensor([[0, 1]], dtype=torch.long),
-            ),
-            split_root / "data" / f"{sample_id}.pt",
-        )
+        payload = {
+            "list_DETR_points_left_up": torch.tensor([[0.15, 0.15], [0.85, 0.85]], dtype=torch.float32),
+            "DETR_node_collections": torch.tensor([[0, 1]], dtype=torch.long),
+        }
+        if with_forest_metadata:
+            payload.update(
+                {
+                    "component_id": torch.tensor([0, 0], dtype=torch.long),
+                    "component_count": 1,
+                    "root_node_indices": torch.tensor([0], dtype=torch.long),
+                    "graph_topology": "virtual_root_forest_v1",
+                }
+            )
+        torch.save(SimpleNamespace(**payload), split_root / "data" / f"{sample_id}.pt")
         image = np.zeros((64, 80, 3), dtype=np.uint8)
         image[:, :, 0] = 64 + index
         image[:, :, 1] = 128
@@ -147,6 +154,24 @@ def test_fast_seg_dataset_disk_cache_can_store_heatmap_targets(tmp_path: Path):
     assert paf_mask.sum().item() == 0
     assert heatmap.max().item() > 0.9
     assert heatmap.sum().item() > 2.0
+
+
+def test_fast_seg_dataset_preserves_virtual_root_metadata(tmp_path: Path):
+    split_root = _write_split(tmp_path, "train", count=1, with_forest_metadata=True)
+    dataset = FastSegSupervisedDataset(
+        split_root,
+        max_size=64,
+        return_forest_metadata=True,
+        strict_virtual_root_metadata=True,
+    )
+
+    sample = dataset[0]
+
+    assert len(sample) == 10
+    metadata = sample[-2]
+    assert metadata["graph_topology"] == "virtual_root_forest_v1"
+    assert metadata["component_count"] == 1
+    assert torch.equal(metadata["component_id"], torch.tensor([0, 0]))
 
 
 def test_build_train_val_datasets_can_select_fast_seg_loader(tmp_path: Path):

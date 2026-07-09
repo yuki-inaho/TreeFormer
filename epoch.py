@@ -817,6 +817,8 @@ def epoch_train(train_loader, net, loss_function, optimizer,
         nodes = [node.to(device) for node in nodes]
         edges = [edge.to(device) for edge in edges]
         target = {'nodes': nodes, 'edges': edges}
+        if len(batchdata[0]) > 8 and isinstance(batchdata[0][-2], dict):
+            target.update(batchdata[0][-2])
         # detr_ids = batchdata[0][-1]
 
         # ====================net=====================
@@ -907,6 +909,9 @@ def epoch_val(val_loader, net, config, device, SMD, args):
 
         # ===================get batch===================
         images, nodes, edges = batchdata[0][0], batchdata[0][1], batchdata[0][2]
+        target = {'nodes': nodes, 'edges': edges}
+        if len(batchdata[0]) > 8 and isinstance(batchdata[0][-2], dict):
+            target.update(batchdata[0][-2])
         # images = images.to(device)
         images = [img.to(device) for img in images]
 
