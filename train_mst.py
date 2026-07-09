@@ -1012,48 +1012,6 @@ def main(args):
     # torch.multiprocessing.set_sharing_strategy('file_system')
     # device = torch.device("cuda") if args.device=='cuda' else torch.device("cpu")
 
-    # img_train_dataset_path1 = "/mnt/datasets/root_dataset/final/train50/img"
-    # img_train_dataset_path2 = "/mnt/datasets/root_dataset/final/train50/unet"
-    # tgt_train_dataset_path = "/mnt/datasets/root_dataset/final/train50/data"
-
-    # img_train_dataset_path1 = "/mnt/workspace2022/liu/datasets/100_30_random_3/train/branch"
-    # img_train_dataset_path2 = "/mnt/workspace2022/liu/datasets/100_30_random_3/train/branch_node"
-    # tgt_train_dataset_path = "/mnt/workspace2022/liu/datasets/100_30_random_3/train/data"
-
-    # img_train_dataset_path1 = "/mnt/workspace2022/liu/datasets/new_8/train/img"
-    # img_train_dataset_path2 = "/mnt/workspace2022/liu/datasets/new_8/train/unet"
-    # tgt_train_dataset_path = "/mnt/workspace2022/liu/datasets/new_8/train/data"
-
-    # img_train_dataset_path1 = "/mnt/datasets/root_dataset/individuals_net/train/img"
-    # img_train_dataset_path2 = "/mnt/datasets/root_dataset/individuals_net/train/unet"
-    # tgt_train_dataset_path = "/mnt/datasets/root_dataset/individuals_net/train/data"
-
-    # img_test_dataset_path1 = "/mnt/datasets/root_dataset/individuals_max_12/test/img"
-    # img_test_dataset_path2 = "/mnt/datasets/root_dataset/individuals_max_12/test/unet" individuals_net
-    # tgt_test_dataset_path = "/mnt/datasets/root_dataset/individuals_max_12/test/data"
-
-    # img_val_dataset_path1 = "/mnt/datasets/root_dataset/final/val/img"
-    # img_val_dataset_path2 = "/mnt/datasets/root_dataset/final/val/unet"
-    # tgt_val_dataset_path = "/mnt/datasets/root_dataset/final/val/data"
-
-    # img_val_dataset_path1 = "/mnt/datasets/root_dataset/individuals_net/val/img"
-    # img_val_dataset_path2 = "/mnt/datasets/root_dataset/individuals_net/val/unet"
-    # tgt_val_dataset_path = "/mnt/datasets/root_dataset/individuals_net/val/data"
-
-    # img_val_dataset_path1 = "/mnt/workspace2022/liu/datasets/100_30_random_3/valid/branch"
-    # img_val_dataset_path2 = "/mnt/workspace2022/liu/datasets/100_30_random_3/valid/branch_node"
-    # tgt_val_dataset_path = "/mnt/workspace2022/liu/datasets/100_30_random_3/valid/data"
-
-    # img_val_dataset_path1 = "/mnt/workspace2022/liu/datasets/new_8/val_aug/img"
-    # img_val_dataset_path2 = "/mnt/workspace2022/liu/datasets/new_8/val_aug/unet"
-    # tgt_val_dataset_path = "/mnt/workspace2022/liu/datasets/new_8/val_aug/data"
-
-    # train_path = "/mnt/workspace2022/liu/datasets/new_8/train"
-    # train_path = "/sqfs2/cmc/1/work/G15538/u6c043/data/dataset/new_8_new/train"
-    # train_path = "/sqfs2/cmc/1/work/G15538/u6c043/data/dataset/move_data/train_aug"
-
-    # val_path = "/sqfs2/cmc/1/work/G15538/u6c043/data/dataset/new_8_new/val_aug"
-    # val_path = "/sqfs2/cmc/1/work/G15538/u6c043/data/dataset/move_data/val_aug"
 
     # dataset_train = LoadCNNDataset(tgt_data_path=tgt_train_dataset_path, feature_path_1=img_train_dataset_path1,
     #                                feature_path_2=img_train_dataset_path2, tgt_detr_dataset_name="DETR_all_",

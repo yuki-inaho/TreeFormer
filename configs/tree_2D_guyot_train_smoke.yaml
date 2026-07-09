@@ -2,7 +2,7 @@ DATA:
   DIM: 2
   BATCH_SIZE: 1
   MAX_SIZE: 256
-  DATA_PATH: /home/kasm-user/Desktop/TreeFormer_assets/datasets/3D2cut_Single_Guyot_extracted
+  DATA_PATH: ../TreeFormer_assets/datasets/3D2cut_Single_Guyot_extracted
   DATASET: guyot-2D
   TRAIN_SPLIT: train
   VAL_SPLIT: test
@@ -60,7 +60,7 @@ TRAIN:
   WEIGHT_DECAY: 1e-4
   LR_DROP: 100
   CLIP_MAX_NORM: 0.1
-  SAVE_PATH: /home/kasm-user/Desktop/TreeFormer_assets/trained_weights_smoke
+  SAVE_PATH: ../TreeFormer_assets/trained_weights_smoke
   VAL_INTERVAL: 1
   SAVE_VAL: False
   LOSSES: ["boxes", "class", "cards", "nodes", "edges"]

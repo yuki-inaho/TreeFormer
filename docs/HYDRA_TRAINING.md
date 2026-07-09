@@ -69,7 +69,7 @@ Validation uses the same direct supervision and checkpoints on `val/aux_total_lo
 
 For the current stabilization work, prefer independent dense modes before the full aux-map objective:
 
-- `train=seg_only`: segmentation loss only. It treats segmentation as background + one foreground stem class, sets detail / heatmap / PAF loss weights to zero, and checkpoints on `val/seg_soft_dice_score`.
+- `train=seg_only`: segmentation loss only. It treats segmentation as background + one foreground target class, sets detail / heatmap / PAF loss weights to zero, and checkpoints on `val/seg_soft_dice_score`.
 - `train=seg_heatmap`: segmentation plus node heatmap. It keeps graph output and graph losses disabled, adds `W_AUX_HEATMAP=1`, keeps PAF loss at zero, and uses `DATA.AUX_TARGET_MODE=seg_heatmap` so `FastSegSupervisedDataset` generates node heatmaps from the split graph annotation.
 - `train=seg_supervised`: legacy compatibility mode from the earlier stabilization work. It is segmentation plus weak external-mask-derived detail boundary regularization.
 
@@ -189,7 +189,7 @@ Recommended initial curriculum for a pretrained private legacy TreeFormer-format
 
 | Stage | Config | Epochs | LR / backbone LR | Purpose | Stop rule |
 |---|---:|---:|---:|---|---|
-| S0. Segmentation | `train=seg_only augmentation=disabled` | 20 | `1e-4` / `3e-5` | Confirm the RGB encoder can learn the external TPE binary stem mask before adding heatmap / PAF / graph objectives. | Continue only if `val/seg_soft_dice_score` or `val/seg_total_loss` improves, then check hard-threshold Dice/IoU and foreground rate for calibration. |
+| S0. Segmentation | `train=seg_only augmentation=disabled` | 20 | `1e-4` / `3e-5` | Confirm the RGB encoder can learn the external binary target mask before adding heatmap / PAF / graph objectives. | Continue only if `val/seg_soft_dice_score` or `val/seg_total_loss` improves, then check hard-threshold Dice/IoU and foreground rate for calibration. |
 | H0. Seg + Heatmap | `train=seg_heatmap augmentation=disabled` | 20 | `1e-4` / `3e-5` | Add node heatmap supervision while keeping graph output and PAF disabled. | Continue only if heatmap error declines without collapsing segmentation metrics. |
 | A0. Aux maps | `train=aux_supervised augmentation=disabled` | 20 | `1e-4` / `3e-5` | Add PAF direction supervision after segmentation and heatmap are learnable. | Continue only if `val/aux_total_loss` declines without collapsing segmentation metrics. |
 | G0. Graph stabilize | `augmentation=disabled` | 20 | `3e-5` / `1e-5` | Re-enable graph output only after aux maps show learnable supervision. | Continue only if train loss declines and `val/smd` does not spike. |

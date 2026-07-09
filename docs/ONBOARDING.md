@@ -146,7 +146,7 @@ pretrained_weights/fork_source_main/
 
 ## 9. Dataset Format
 
-TreeFormer の legacy dataloader は split ごとの dataset root を `LoadCNNDataset(parent_path=...)` に渡す。入力は `img/` 配下の RGB 画像で、同名 stem の `.pt` graph annotation を `data/` から読む。
+TreeFormer の legacy dataloader は split ごとの dataset root を `LoadCNNDataset(parent_path=...)` に渡す。入力は `img/` 配下の RGB 画像で、同名 sample id の `.pt` graph annotation を `data/` から読む。
 
 split root の基本構造:
 
@@ -202,6 +202,6 @@ git status --ignored --short
 ```
 
 - **依存ライブラリ:** `pyproject.toml` を参照。主要依存は PyTorch 2.6 系、torchvision 0.21 系、scikit-image 0.25 系、NetworkX、Pillow、PyYAML、Hydra、TensorBoard、Schedule-Free。MMCV / OpenMMLab 系は使用しない。
-- **連絡先/責任者:** 未定。GitHub repository owner は `yuki-inaho`。
+- **連絡先/責任者:** 未定。
 
 > ※この文書は現在の smoke training 完了スコープに基づく。full training の実行結果を得た場合は、config、checkpoint path、主要ログ、失敗時の recovery 手順を追記する。
