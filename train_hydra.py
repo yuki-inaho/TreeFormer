@@ -48,6 +48,12 @@ def _build_dataloaders(legacy_config: Any, distributed_context: Any) -> tuple[Da
 
     dataset_train, dataset_val = build_train_val_datasets(legacy_config.DATA)
     num_workers = int(getattr(legacy_config.DATA, "NUM_WORKERS", 0))
+    persistent_workers = bool(getattr(legacy_config.DATA, "PERSISTENT_WORKERS", False)) and num_workers > 0
+    prefetch_factor = int(getattr(legacy_config.DATA, "PREFETCH_FACTOR", 2))
+    loader_worker_kwargs: dict[str, Any] = {}
+    if num_workers > 0:
+        loader_worker_kwargs["persistent_workers"] = persistent_workers
+        loader_worker_kwargs["prefetch_factor"] = prefetch_factor
     if distributed_context.is_distributed:
         train_sampler = torch.utils.data.distributed.DistributedSampler(dataset_train, shuffle=True)
         valid_sampler = torch.utils.data.distributed.DistributedSampler(dataset_val, shuffle=False)
@@ -66,6 +72,7 @@ def _build_dataloaders(legacy_config: Any, distributed_context: Any) -> tuple[Da
         pin_memory=torch.cuda.is_available(),
         num_workers=num_workers,
         sampler=train_sampler,
+        **loader_worker_kwargs,
     )
     val_loader = DataLoader(
         dataset_val,
@@ -76,6 +83,7 @@ def _build_dataloaders(legacy_config: Any, distributed_context: Any) -> tuple[Da
         pin_memory=torch.cuda.is_available(),
         num_workers=num_workers,
         sampler=valid_sampler,
+        **loader_worker_kwargs,
     )
     if len(train_loader) == 0:
         raise ValueError(

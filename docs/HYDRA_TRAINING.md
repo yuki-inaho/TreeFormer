@@ -89,6 +89,7 @@ Full no-geometry aux stage:
 
 ```bash
 export TREEFORMER_PRIVATE_DATA=<legacy_treeformer_dataset_root>
+just cache-private-fast-seg
 just train-private-seg-supervised
 just train-private-aux-supervised
 ```
@@ -113,6 +114,8 @@ Operational notes:
 - External mask images may be stored as `0/255` PNGs; the loader thresholds them to binary float targets before BCE / Dice / Focal loss, and the loss code rejects targets outside `[0, 1]`.
 - The default segmentation loss uses binary BCE + Dice with Focal disabled. `AUX_SEG_POS_WEIGHT=auto` is capped conservatively so rare foreground does not cause broad positive overprediction.
 - `train=seg_supervised` adds a weak optional STDC-style detail boundary auxiliary head as the fifth aux channel. Its target is a multi-scale Laplacian boundary map derived from the external segmentation mask, not a graph edge or PAF. `W_AUX_DETAIL=0.1` keeps it as a light boundary-sharpening regularizer while BCE + Dice segmentation remains the primary objective.
+- `train=seg_supervised` uses `FastSegSupervisedDataset` by default. It reads only RGB and external segmentation masks, avoiding legacy graph-derived PAF/heatmap generation while keeping the same aux training batch contract with zero-valued unused PAF/heatmap tensors.
+- For full segmentation-only training, generate repo-external cache first with `just cache-private-fast-seg`, then run `just train-private-seg-supervised`. The full recipe uses `DATA.SEG_CACHE_MODE=disk`, `DATA.NUM_WORKERS=4`, `DATA.PERSISTENT_WORKERS=true`, and `DATA.PREFETCH_FACTOR=2` by default. Set `TREEFORMER_SEG_CACHE_MODE=none` to bypass disk cache.
 - Aux/seg stages may keep EMA updates enabled, but use `ema.evaluate=false` for validation and best-checkpoint selection because the aux head is newly initialized and `decay=0.9999` changes too slowly during short stages.
 - RGB input is normalized by the legacy loader with `Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])`, so model input is scaled from `[0, 1]` to `[-1, 1]`.
 - In `train=seg_supervised`, `W_AUX_HEATMAP=0` and `W_AUX_PAF=0`; heatmap and PAF channels are not trained in that stage. The aux output layout is segmentation, heatmap, PAF-x, PAF-y, optional detail boundary. `train=aux_supervised` keeps the original 4-channel layout and has `W_AUX_DETAIL=0`.
@@ -227,6 +230,46 @@ PYTHONPATH=. "$TREEFORMER_PYTHON" infer_aux_panel_treeformer.py \
 ```
 
 The optional JSON summary stores compact scalar statistics only. Generated panels and summaries must stay under `${TREEFORMER_ASSETS_ROOT}` or another repo-external artifact directory. Detail boundary panels are model-output panels only when the checkpoint has a fifth aux channel; use `--show-derived-detail` only for debugging segmentation-derived boundaries. For segmentation-only checkpoints, heatmap/PAF maps are not trained and are omitted by default.
+
+## Fast Segmentation Dataset Cache
+
+`train=seg_supervised` is bottlenecked by target preparation if it uses the legacy TreeFormer loader. The fast segmentation path avoids graph-derived dense target generation and can optionally read preprocessed image/mask tensors from a repo-external cache.
+
+Generate cache:
+
+```bash
+export TREEFORMER_PRIVATE_DATA=<legacy_treeformer_dataset_root>
+export TREEFORMER_SEG_CACHE_ROOT=${TREEFORMER_ASSETS_ROOT:-../TreeFormer_assets}/cache/fast_seg/<cache_name>
+
+just cache-private-fast-seg
+```
+
+Direct CLI:
+
+```bash
+PYTHONPATH=. "$TREEFORMER_PYTHON" generate_fast_seg_cache.py \
+  --dataset-root "$TREEFORMER_PRIVATE_DATA" \
+  --cache-root "$TREEFORMER_SEG_CACHE_ROOT" \
+  --splits train val \
+  --max-size 128
+```
+
+Representative timing with `DATA.MAX_SIZE=128` and `BATCH_SIZE=12`:
+
+| Loader path | Train DataLoader pass |
+|---|---:|
+| legacy `LoadCNNDataset`, workers=0 | 7.6-8.0s |
+| fast seg, no disk cache, workers=0 | 3.4s |
+| fast seg, disk cache, workers=0 | 0.21s |
+| fast seg, disk cache, workers=4 | 0.43-0.61s |
+
+End-to-end one-epoch GPU timing with fast disk cache and 4 workers:
+
+- train epoch with EMA: about 2.0s
+- validation epoch: about 0.4s
+- checkpoint save still costs about 0.4-0.8s depending on whether both `best.pt` and `last.pt` are written
+
+Keep cache files outside Git. They are derived artifacts and may contain dataset-derived tensors.
 
 ## Optimizers
 

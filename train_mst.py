@@ -847,6 +847,43 @@ def build_train_val_datasets(data_config):
     train_sample_transform = build_graph_augmentation(_get_data_attr(data_config, "AUGMENTATION", None))
     legacy_rotate = bool(_get_data_attr(data_config, "LEGACY_ROTATE", True))
     segmentation_target_source = _get_data_attr(data_config, "SEGMENTATION_TARGET_SOURCE", "auto")
+    fast_segmentation_loader = bool(_get_data_attr(data_config, "FAST_SEGMENTATION_LOADER", False))
+    if fast_segmentation_loader:
+        if train_sample_transform is not None:
+            raise ValueError("DATA.FAST_SEGMENTATION_LOADER=true does not support graph augmentation")
+        if legacy_rotate:
+            raise ValueError("DATA.FAST_SEGMENTATION_LOADER=true requires DATA.LEGACY_ROTATE=false")
+        if str(segmentation_target_source).lower() != "external_mask":
+            raise ValueError("DATA.FAST_SEGMENTATION_LOADER=true requires DATA.SEGMENTATION_TARGET_SOURCE=external_mask")
+        from treeformer_train.fast_seg_dataset import FastSegSupervisedDataset
+
+        cache_mode = _get_data_attr(data_config, "SEG_CACHE_MODE", "none")
+        cache_root = _get_data_attr(data_config, "SEG_CACHE_ROOT", None)
+        train_cache_dir = os.path.join(cache_root, "train") if cache_root else None
+        val_cache_dir = os.path.join(cache_root, "val") if cache_root else None
+        detail_scales = tuple(int(item) for item in _get_data_attr(data_config, "AUX_DETAIL_SCALES", (1, 2, 4)))
+        train_dataset = FastSegSupervisedDataset(
+            train_path,
+            max_size=data_config.MAX_SIZE,
+            cache_mode=cache_mode,
+            cache_dir=train_cache_dir,
+            detail_threshold=float(_get_data_attr(data_config, "AUX_DETAIL_THRESHOLD", 0.1)),
+            detail_scales=detail_scales,
+            detail_support_kernel_size=int(_get_data_attr(data_config, "AUX_DETAIL_SUPPORT_KERNEL_SIZE", 3)),
+        )
+        val_dataset = FastSegSupervisedDataset(
+            val_path,
+            max_size=data_config.MAX_SIZE,
+            cache_mode=cache_mode,
+            cache_dir=val_cache_dir,
+            detail_threshold=float(_get_data_attr(data_config, "AUX_DETAIL_THRESHOLD", 0.1)),
+            detail_scales=detail_scales,
+            detail_support_kernel_size=int(_get_data_attr(data_config, "AUX_DETAIL_SUPPORT_KERNEL_SIZE", 3)),
+        )
+        return (
+            _limit_dataset(train_dataset, _get_data_attr(data_config, "TRAIN_LIMIT")),
+            _limit_dataset(val_dataset, _get_data_attr(data_config, "VAL_LIMIT")),
+        )
     train_dataset = LoadCNNDataset(parent_path=train_path, max_size=data_config.MAX_SIZE, max_change_light_rate=0.3,
                                    is_train=False, is_rotate=legacy_rotate, sample_transform=train_sample_transform,
                                    segmentation_target_source=segmentation_target_source)

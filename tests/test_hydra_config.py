@@ -114,9 +114,13 @@ def test_hydra_seg_supervised_training_uses_segmentation_only_losses():
     assert cfg.TRAIN.W_AUX_PAF == 0.0
     assert cfg.MODEL.AUX_HEAD.OUT_CHANNELS == 5
     assert cfg.DATA.SEGMENTATION_TARGET_SOURCE == "external_mask"
+    assert cfg.DATA.LEGACY_ROTATE is False
+    assert cfg.DATA.FAST_SEGMENTATION_LOADER is True
+    assert cfg.DATA.SEG_CACHE_MODE == "none"
     assert cfg.checkpoint.metric_name == "val/seg_soft_dice_score"
     assert cfg.checkpoint.mode == "max"
 
     legacy = make_legacy_config(cfg)
     assert legacy.TRAIN.W_AUX_HEATMAP == 0.0
     assert legacy.TRAIN.W_AUX_PAF == 0.0
+    assert legacy.DATA.AUX_DETAIL_SCALES == [1, 2, 4]

@@ -86,6 +86,13 @@ def make_legacy_config(config: DictConfig | Mapping[str, Any]) -> AttrDict:
                 existing = {}
             legacy[key] = deep_update(existing, section)
 
+    train_section = legacy.get("TRAIN", {})
+    data_section = legacy.get("DATA", {})
+    if isinstance(train_section, Mapping) and isinstance(data_section, dict):
+        for key in ("AUX_DETAIL_THRESHOLD", "AUX_DETAIL_SCALES", "AUX_DETAIL_SUPPORT_KERNEL_SIZE"):
+            if key in train_section and key not in data_section:
+                data_section[key] = train_section[key]
+
     missing = [key for key in ("DATA", "MODEL", "TRAIN", "log") if key not in legacy]
     if missing:
         raise ValueError(f"Hydra config cannot be converted to legacy config; missing sections: {missing}")
