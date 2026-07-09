@@ -48,6 +48,53 @@ The prepared smoke template uses:
 
 With `ema=default`, EMA shadow weights and EMA validation stay on GPU. On RTX A4500, batch size 12 with `DATA.MAX_SIZE=128` used about 3.1GiB for the measured train step; the practical estimate with GPU EMA is about 3.5-4.0GiB. `nvidia-smi` reports total GPU memory across all processes, so separate concurrent jobs must be excluded before treating it as TreeFormer-only VRAM.
 
+## Aux Supervised Map Training
+
+When graph annotations are too sparse or too rough to make `val/smd` meaningful, use `train=aux_supervised` first. This mode keeps the RGB input path, adds a lightweight dense prediction head on the encoder feature map, and disables graph decoder output for the training step.
+
+The aux head predicts four dense channels:
+
+- segmentation logit
+- node heatmap logit
+- PAF x direction
+- PAF y direction
+
+The training loss is:
+
+- `train/aux_seg_bce`: BCE-with-logits against the dataloader `unet` mask
+- `train/aux_heatmap_mse`: MSE between sigmoid heatmap output and generated node heatmap
+- `train/aux_paf_l1`: masked L1 between tanh PAF output and generated PAF vectors
+
+Validation uses the same direct supervision and checkpoints on `val/aux_total_loss`. Graph losses are not computed, and the graph SMD validator is skipped. This makes the first question concrete: can the network learn the mask / heatmap / direction fields from RGB before asking it to output a clean graph.
+
+Config-only check:
+
+```bash
+export TREEFORMER_PRIVATE_DATA=<legacy_treeformer_dataset_root>
+just cfg-private-aux-supervised
+```
+
+Short GPU smoke:
+
+```bash
+export TREEFORMER_PRIVATE_DATA=<legacy_treeformer_dataset_root>
+just smoke-private-aux-supervised
+```
+
+Full no-geometry aux stage:
+
+```bash
+export TREEFORMER_PRIVATE_DATA=<legacy_treeformer_dataset_root>
+just train-private-aux-supervised
+```
+
+Operational notes:
+
+- Use `augmentation=disabled` first. Do not use geometric, deformation, crop, rotate, affine, perspective, or elastic DA for this stage.
+- `checkpoint.pretrained_strict=false` is expected because the pretrained graph model has no aux head parameters.
+- Keep `DATA.BATCH_SIZE=12` and `DATA.MAX_SIZE=128` unless the GPU is shared or memory pressure is observed.
+- Monitor `val/aux_total_loss`, `val/seg_iou`, `val/heatmap_mae`, and `val/paf_masked_l1`; do not interpret `val/smd` for this mode because graph validation is intentionally skipped.
+
 ## Augmentation
 
 The current private-data curriculum intentionally avoids geometric and deformation augmentation. Use `augmentation=disabled` for the stabilization stage and `augmentation=photometric_opencv` only after the no-DA baseline behaves well.
@@ -68,7 +115,7 @@ Photometric backend selection:
 - `augmentation=regularized_albumentationsx` explicitly opts into the AlbumentationsX-compatible `albumentations` module.
 - `allow_fallback=true` falls back to the OpenCV implementation when AlbumentationsX is unavailable.
 - `augmentation=photometric_opencv` runs image-only optical DA.
-- `augmentation=geometry_mild` runs a conservative graph-aware deformation profile for late curriculum stages.
+- `augmentation=geometry_mild` remains an implementation experiment; it is not part of the current curriculum.
 
 AlbumentationsX is optional because it has a separate dual-license model and can require platform-specific binary dependencies. To enable that backend in the active venv through the project dependency group:
 
@@ -101,8 +148,9 @@ Recommended initial curriculum for a pretrained private legacy TreeFormer-format
 
 | Stage | Config | Epochs | LR / backbone LR | Purpose | Stop rule |
 |---|---:|---:|---:|---|---|
-| 0. Stabilize | `augmentation=disabled` | 20 | `3e-5` / `1e-5` | Confirm pretrained load, dataset contract, and optimizer stability without new DA noise. | Continue only if train loss declines and val_smd does not spike. |
-| 1. Optical | `augmentation=photometric_opencv` | 80 | `5e-5` / `1.5e-5` | Learn robustness to illumination, noise, blur, and color shifts while graph labels stay unchanged. | Use best checkpoint if val_smd improves; otherwise return to Stage 0 best. |
+| A0. Aux maps | `train=aux_supervised augmentation=disabled` | 20 | `1e-4` / `3e-5` | Confirm the RGB encoder can learn segmentation, node heatmap, and PAF direction fields from direct supervision. | Continue only if `val/aux_total_loss` declines and `val/seg_iou` improves. |
+| G0. Graph stabilize | `augmentation=disabled` | 20 | `3e-5` / `1e-5` | Re-enable graph output only after aux maps show learnable supervision. | Continue only if train loss declines and `val/smd` does not spike. |
+| G1. Optical | `augmentation=photometric_opencv` | 80 | `5e-5` / `1.5e-5` | Learn robustness to illumination, noise, blur, and color shifts while graph labels stay unchanged. | Use best checkpoint if `val/smd` improves; otherwise return to previous best. |
 
 Operational notes:
 
@@ -115,6 +163,7 @@ Operational notes:
 Config-only checks are available:
 
 ```bash
+just cfg-private-aux-supervised
 just cfg-private-curriculum-stage0
 export TREEFORMER_CURRICULUM_RESUME=<previous_stage_best_or_last_checkpoint>
 just cfg-private-curriculum-stage1
@@ -127,7 +176,7 @@ just cfg-private-curriculum-stage1
 | `data` | `guyot_smoke`, `guyot_full` | Guyot dataset paths, limits, workers, seed |
 | `augmentation` | `disabled`, `photometric_opencv`, `regularized`, `regularized_albumentationsx`, `geometry_mild` | Image-only photometric DA and graph-aware affine / elastic DA |
 | `model` | `treeformer_2d` | Existing 2D TreeFormer architecture settings |
-| `train` | `default`, `dry_run` | Epochs, loss weights, LR, save path |
+| `train` | `default`, `dry_run`, `aux_supervised` | Epochs, loss weights, LR, save path, graph-vs-aux training mode |
 | `optimizer` | `adamw_step`, `schedulefree_adamw`, `muon_schedulefree` | Optimizer and scheduler selection |
 | `logging` | `tensorboard`, `disabled` | TensorBoard event writing |
 | `ema` | `disabled`, `default` | EMA update/evaluation behavior |
@@ -158,6 +207,17 @@ When `logging=tensorboard`, rank 0 writes scalars to `${runtime.output_dir}/tens
 - `optim/lr`
 - `time/epoch_seconds`
 - `checkpoint/best_metric`
+
+For `train=aux_supervised`, expected tags instead include:
+
+- `train/aux_total_loss`
+- `train/aux_seg_bce`
+- `train/aux_heatmap_mse`
+- `train/aux_paf_l1`
+- `val/aux_total_loss`
+- `val/seg_iou`
+- `val/heatmap_mae`
+- `val/paf_masked_l1`
 
 ## EMA and checkpointing
 

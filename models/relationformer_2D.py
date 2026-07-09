@@ -6,14 +6,45 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 # from torchvision.ops import nms
-import matplotlib.pyplot as plt
-import math
 import copy
 
 from .deformable_detr_backbone import build_backbone
 from .deformable_detr_2D import build_deforamble_transformer
-from .utils import nested_tensor_from_tensor_list, NestedTensor, inverse_sigmoid
+from .utils import nested_tensor_from_tensor_list, NestedTensor
 ########################################################################################################################
+
+
+def _get_attr(config, name, default=None):
+    return getattr(config, name, default)
+
+
+class AuxMapHead(nn.Module):
+    """Lightweight dense prediction head for segmentation, heatmap and PAF targets."""
+
+    def __init__(self, in_channels, hidden_channels, out_channels):
+        super().__init__()
+        hidden_channels = int(hidden_channels)
+        out_channels = int(out_channels)
+        if hidden_channels <= 0:
+            raise ValueError(f"aux head hidden_channels must be positive, got {hidden_channels}")
+        if out_channels <= 0:
+            raise ValueError(f"aux head out_channels must be positive, got {out_channels}")
+        groups = min(8, hidden_channels)
+        while hidden_channels % groups != 0:
+            groups -= 1
+        self.layers = nn.Sequential(
+            nn.Conv2d(in_channels, hidden_channels, kernel_size=3, padding=1),
+            nn.GroupNorm(groups, hidden_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(hidden_channels, hidden_channels, kernel_size=3, padding=1),
+            nn.GroupNorm(groups, hidden_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(hidden_channels, out_channels, kernel_size=1),
+        )
+
+    def forward(self, feature, output_size):
+        logits = self.layers(feature)
+        return F.interpolate(logits, size=output_size, mode="bilinear", align_corners=False)
 
 
 class RelationFormer(nn.Module):
@@ -36,6 +67,7 @@ class RelationFormer(nn.Module):
         self.aux_loss = config.MODEL.DECODER.AUX_LOSS
         self.with_box_refine = config.MODEL.DECODER.WITH_BOX_REFINE
         self.num_classes = config.MODEL.NUM_CLASSES
+        self.graph_output_enabled = bool(_get_attr(config.MODEL, "GRAPH_OUTPUT_ENABLED", True))
 
         self.class_embed = nn.Linear(config.MODEL.DECODER.HIDDEN_DIM, 2)
         self.bbox_embed = MLP(config.MODEL.DECODER.HIDDEN_DIM, config.MODEL.DECODER.HIDDEN_DIM, 4, 3)
@@ -76,6 +108,17 @@ class RelationFormer(nn.Module):
                     nn.GroupNorm(32, self.hidden_dim),
                 )])
 
+        aux_head_config = _get_attr(config.MODEL, "AUX_HEAD", None)
+        self.aux_head = None
+        if aux_head_config is not None and bool(_get_attr(aux_head_config, "ENABLED", False)):
+            self.aux_head = AuxMapHead(
+                in_channels=self.hidden_dim,
+                hidden_channels=_get_attr(aux_head_config, "HIDDEN_DIM", max(self.hidden_dim // 4, 32)),
+                out_channels=_get_attr(aux_head_config, "OUT_CHANNELS", 4),
+            )
+        if not self.graph_output_enabled and self.aux_head is None:
+            raise ValueError("MODEL.GRAPH_OUTPUT_ENABLED=false requires MODEL.AUX_HEAD.ENABLED=true")
+
         # self.decoder.decoder.bbox_embed = None
 
 
@@ -95,7 +138,7 @@ class RelationFormer(nn.Module):
         # Create 
         srcs = []
         masks = []
-        for l, feat in enumerate(features):
+        for level_idx, feat in enumerate(features):
             src, mask = feat.decompose()
             # print(src.shape)
             # torch.Size([2, 512, 8, 8])
@@ -117,7 +160,7 @@ class RelationFormer(nn.Module):
             #          [False, False, False, False, False, False, False, False],
             #          [False, False, False, False, False, False, False, False]]],
             #        device='cuda:0')
-            srcs.append(self.input_proj[l](src))
+            srcs.append(self.input_proj[level_idx](src))
             # self.input_proj = nn.ModuleList([
             #                 nn.Sequential(
             #                     nn.Conv2d(self.encoder.num_channels[0], self.hidden_dim, kernel_size=1),512*256
@@ -136,15 +179,21 @@ class RelationFormer(nn.Module):
             masks.append(mask)
             assert mask is not None
 
+        out = {}
+        if self.aux_head is not None:
+            out["aux_maps"] = self.aux_head(srcs[0], samples.tensors.shape[-2:])
+        if not self.graph_output_enabled:
+            return None, out
+
         if self.num_feature_levels > len(srcs):
             _len_srcs = len(srcs)  # 3
-            for l in range(_len_srcs, self.num_feature_levels):
-                if l == _len_srcs:
-                    src = self.input_proj[l](features[-1].tensors)
+            for level_idx in range(_len_srcs, self.num_feature_levels):
+                if level_idx == _len_srcs:
+                    src = self.input_proj[level_idx](features[-1].tensors)
                     # print(src.shape)
                     # torch.Size([2, 256, 1, 1])
                 else:
-                    src = self.input_proj[l](srcs[-1])
+                    src = self.input_proj[level_idx](srcs[-1])
                 m = samples.mask
                 mask = F.interpolate(m[None].float(), size=src.shape[-2:]).to(torch.bool)[0]
                 # print(mask)
@@ -191,7 +240,7 @@ class RelationFormer(nn.Module):
         coord_loc = self.bbox_embed(object_token).sigmoid()
         # 2 20 4
 
-        out = {'pred_logits': class_prob, 'pred_nodes': coord_loc}
+        out.update({'pred_logits': class_prob, 'pred_nodes': coord_loc})
         return hs, out
 
 

@@ -2,11 +2,11 @@ defaults:
   - data: guyot_smoke
   - augmentation: disabled
   - model: treeformer_2d
+  - checkpoint: default
   - train: default
   - optimizer: adamw_step
   - logging: tensorboard
   - ema: disabled
-  - checkpoint: default
   - distributed: single
   - _self_
 

@@ -1,5 +1,7 @@
 # @package _global_
 TRAIN:
+  MODE: graph
+  SKIP_GRAPH_OUTPUT: false
   EPOCHS: 1
   LR: 1e-4
   LR_BACKBONE: 3e-5
@@ -15,6 +17,9 @@ TRAIN:
   W_CARD: 1.0
   W_NODE: 5.0
   W_EDGE: 4.0
+  W_AUX_SEG: 1.0
+  W_AUX_HEATMAP: 1.0
+  W_AUX_PAF: 0.25
 log:
   exp_name: hydra_guyot_smoke
   message: Hydra-managed TreeFormer Guyot training

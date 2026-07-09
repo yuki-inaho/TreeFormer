@@ -134,8 +134,45 @@ def _metrics_dict(
     return metrics
 
 
+def _is_aux_supervised_training(cfg: DictConfig) -> bool:
+    mode = str(OmegaConf.select(cfg, "TRAIN.MODE", default="graph"))
+    return mode == "aux_supervised" or bool(OmegaConf.select(cfg, "TRAIN.SKIP_GRAPH_OUTPUT", default=False))
+
+
+def _aux_metrics_dict(
+    *,
+    train_metrics: dict[str, float],
+    val_metrics: dict[str, float],
+    lr: float,
+    epoch_seconds: float,
+    best_metric: float | None,
+) -> dict[str, float]:
+    metrics = {
+        "train/aux_total_loss": train_metrics["total"],
+        "train/aux_seg_bce": train_metrics["seg_bce"],
+        "train/aux_heatmap_mse": train_metrics["heatmap_mse"],
+        "train/aux_paf_l1": train_metrics["paf_l1"],
+        "val/aux_total_loss": val_metrics["total"],
+        "val/aux_seg_bce": val_metrics["seg_bce"],
+        "val/aux_heatmap_mse": val_metrics["heatmap_mse"],
+        "val/aux_paf_l1": val_metrics["paf_l1"],
+        "val/seg_iou": val_metrics["seg_iou"],
+        "val/heatmap_mae": val_metrics["heatmap_mae"],
+        "val/paf_masked_l1": val_metrics["paf_masked_l1"],
+        "optim/lr": lr,
+        "time/epoch_seconds": epoch_seconds,
+    }
+    if best_metric is not None:
+        metrics["checkpoint/best_metric"] = best_metric
+    return metrics
+
+
 @hydra.main(version_base="1.3", config_path="conf", config_name="config")
 def main(cfg: DictConfig) -> None:
+    aux_supervised_training = _is_aux_supervised_training(cfg)
+    if aux_supervised_training:
+        cfg.MODEL.GRAPH_OUTPUT_ENABLED = False
+
     legacy_config = make_legacy_config(cfg)
     distributed_context = setup_distributed(cfg.distributed)
     device = _select_device(cfg, distributed_context.local_rank)
@@ -146,15 +183,13 @@ def main(cfg: DictConfig) -> None:
         print(legacy_config.log.message)
 
     from models import build_model
-    from models.matcher import build_matcher
-    from losses_only import SetCriterion
-    from epoch import epoch_train, epoch_val
-    from metric_smd import StreetMoverDistance
-    from monai.utils import MetricReduction
 
     train_loader, val_loader = _build_dataloaders(legacy_config, distributed_context)
     if distributed_context.is_rank_zero:
         print(f"Dataset splits -> Train: {len(train_loader.dataset)} | Valid: {len(val_loader.dataset)}")
+
+    if aux_supervised_training and not bool(OmegaConf.select(cfg, "MODEL.AUX_HEAD.ENABLED", default=False)):
+        raise ValueError("aux supervised training requires MODEL.AUX_HEAD.ENABLED=true")
 
     args = LegacyArgs(device=str(cfg.runtime.device), use_mst_train=True, local_rank=distributed_context.local_rank)
     model = build_model(legacy_config, args).to(device)
@@ -183,11 +218,25 @@ def main(cfg: DictConfig) -> None:
             model,
             device_ids=[distributed_context.local_rank] if device.type == "cuda" else None,
             output_device=distributed_context.local_rank if device.type == "cuda" else None,
+            find_unused_parameters=aux_supervised_training,
         )
 
-    matcher = build_matcher(legacy_config)
-    loss = SetCriterion(config=legacy_config, matcher=matcher, net=model, args=args)
-    smd = StreetMoverDistance(eps=1e-7, max_iter=100, reduction=MetricReduction.MEAN)
+    if aux_supervised_training:
+        from treeformer_train.aux_training import build_aux_loss_weights, epoch_train_aux, epoch_val_aux
+
+        aux_loss_weights = build_aux_loss_weights(legacy_config.TRAIN)
+        loss = None
+        smd = None
+    else:
+        from epoch import epoch_train, epoch_val
+        from losses_only import SetCriterion
+        from metric_smd import StreetMoverDistance
+        from models.matcher import build_matcher
+        from monai.utils import MetricReduction
+
+        matcher = build_matcher(legacy_config)
+        loss = SetCriterion(config=legacy_config, matcher=matcher, net=model, args=args)
+        smd = StreetMoverDistance(eps=1e-7, max_iter=100, reduction=MetricReduction.MEAN)
     checkpoint_manager = CheckpointManager(
         cfg.checkpoint.dir,
         metric_name=str(cfg.checkpoint.metric_name),
@@ -225,40 +274,69 @@ def main(cfg: DictConfig) -> None:
 
         epoch_start = time.time()
         set_optimizer_train_mode(optimizer_bundle.optimizer, required=optimizer_bundle.requires_train_eval)
-        train_total, train_class, train_nodes, train_edges, train_boxes, train_cards = epoch_train(
-            train_loader=train_loader,
-            net=model,
-            loss_function=loss,
-            optimizer=optimizer_bundle.optimizer,
-            device=device,
-            last_epoch=start_epoch,
-            epoch_now=epoch,
-            max_epoch=max_epochs,
-            clip_max_norm=float(legacy_config.TRAIN.CLIP_MAX_NORM),
-            after_optimizer_step=(lambda **_: ema.update(model)) if ema is not None else None,
-        )
+        if aux_supervised_training:
+            train_metrics = epoch_train_aux(
+                train_loader=train_loader,
+                net=model,
+                optimizer=optimizer_bundle.optimizer,
+                device=device,
+                epoch_now=epoch,
+                max_epoch=max_epochs,
+                loss_weights=aux_loss_weights,
+                clip_max_norm=float(legacy_config.TRAIN.CLIP_MAX_NORM),
+                after_optimizer_step=(lambda **_: ema.update(model)) if ema is not None else None,
+            )
+        else:
+            train_total, train_class, train_nodes, train_edges, train_boxes, train_cards = epoch_train(
+                train_loader=train_loader,
+                net=model,
+                loss_function=loss,
+                optimizer=optimizer_bundle.optimizer,
+                device=device,
+                last_epoch=start_epoch,
+                epoch_now=epoch,
+                max_epoch=max_epochs,
+                clip_max_norm=float(legacy_config.TRAIN.CLIP_MAX_NORM),
+                after_optimizer_step=(lambda **_: ema.update(model)) if ema is not None else None,
+            )
 
         set_optimizer_eval_mode(optimizer_bundle.optimizer, required=optimizer_bundle.requires_train_eval)
-        if ema is not None and bool(cfg.ema.evaluate):
-            with ema.average_parameters(model):
-                val_smd = epoch_val(val_loader=val_loader, net=model, config=legacy_config, device=device, SMD=smd, args=args)
+        if aux_supervised_training:
+            if ema is not None and bool(cfg.ema.evaluate):
+                with ema.average_parameters(model):
+                    val_metrics = epoch_val_aux(val_loader=val_loader, net=model, device=device, loss_weights=aux_loss_weights)
+            else:
+                val_metrics = epoch_val_aux(val_loader=val_loader, net=model, device=device, loss_weights=aux_loss_weights)
         else:
-            val_smd = epoch_val(val_loader=val_loader, net=model, config=legacy_config, device=device, SMD=smd, args=args)
+            if ema is not None and bool(cfg.ema.evaluate):
+                with ema.average_parameters(model):
+                    val_smd = epoch_val(val_loader=val_loader, net=model, config=legacy_config, device=device, SMD=smd, args=args)
+            else:
+                val_smd = epoch_val(val_loader=val_loader, net=model, config=legacy_config, device=device, SMD=smd, args=args)
 
         epoch_seconds = time.time() - epoch_start
         lr = float(optimizer_bundle.optimizer.param_groups[0]["lr"])
-        metrics = _metrics_dict(
-            train_total=train_total,
-            train_class=train_class,
-            train_nodes=train_nodes,
-            train_edges=train_edges,
-            train_boxes=train_boxes,
-            train_cards=train_cards,
-            val_smd=val_smd,
-            lr=lr,
-            epoch_seconds=epoch_seconds,
-            best_metric=checkpoint_manager.best_metric,
-        )
+        if aux_supervised_training:
+            metrics = _aux_metrics_dict(
+                train_metrics=train_metrics,
+                val_metrics=val_metrics,
+                lr=lr,
+                epoch_seconds=epoch_seconds,
+                best_metric=checkpoint_manager.best_metric,
+            )
+        else:
+            metrics = _metrics_dict(
+                train_total=train_total,
+                train_class=train_class,
+                train_nodes=train_nodes,
+                train_edges=train_edges,
+                train_boxes=train_boxes,
+                train_cards=train_cards,
+                val_smd=val_smd,
+                lr=lr,
+                epoch_seconds=epoch_seconds,
+                best_metric=checkpoint_manager.best_metric,
+            )
 
         if distributed_context.is_rank_zero:
             writer.add_scalars(epoch, metrics)
@@ -279,7 +357,13 @@ def main(cfg: DictConfig) -> None:
                 if checkpoint_result is not None
                 else ""
             )
-            print(f"Epoch {epoch}/{max_epochs} | train_total={train_total:.6f} | val_smd={val_smd:.8f}{best_summary}")
+            if aux_supervised_training:
+                print(
+                    f"Epoch {epoch}/{max_epochs} | train_aux_total={train_metrics['total']:.6f} "
+                    f"| val_aux_total={val_metrics['total']:.8f} | val_seg_iou={val_metrics['seg_iou']:.6f}{best_summary}"
+                )
+            else:
+                print(f"Epoch {epoch}/{max_epochs} | train_total={train_total:.6f} | val_smd={val_smd:.8f}{best_summary}")
         optimizer_bundle.scheduler.step()
         barrier(distributed_context)
 

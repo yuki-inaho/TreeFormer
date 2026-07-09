@@ -23,8 +23,9 @@
 - smoke training は完了済みだが、full training の完走は未保証。full training を開始する場合は別途実行計画とログ保存方針を決める。
 - private legacy TreeFormer-format dataset で GPU smoke を行う場合は、dataset root を `TREEFORMER_PRIVATE_DATA` 環境変数で渡し、`just cfg-private-pretrained-gpu-batch12` で構成だけ確認してから `just smoke-private-pretrained-gpu-batch12` を実行する。batch size は 12 を初期値とし、smoke recipe は `DATA.TRAIN_LIMIT=24` / `DATA.VAL_LIMIT=12` を明示する。EMA は GPU 上で保持する。
 - 現在の private-data curriculum では幾何・変形DAを使わない。Stage 0 は `augmentation=disabled`、Stage 1 以降に使う場合も `augmentation=photometric_opencv` の image-only 光学DAまでに留める。random crop / rotate / scale / affine / perspective / elastic / graph deformation はこの curriculum では使わない。
+- graph annotation の粗さで `val/smd` が判断材料にならない場合は、先に `train=aux_supervised` を使う。これは graph decoder output / graph loss / SMD validation をスキップし、RGB から segmentation、node heatmap、PAF direction を直接教師付きで学習する。評価軸は `val/aux_total_loss`、`val/seg_iou`、`val/heatmap_mae`、`val/paf_masked_l1` とする。
 - optional AlbumentationsX backend は `uv pip install --python "$TREEFORMER_PYTHON" --project . --group albumentationsx` で導入する。入れない場合も OpenCV backend で training は継続できる。
-- 学習カリキュラムは Stage 0 no-DA stabilization、Stage 1 photometric OpenCV の checkpoint-resume 方式を初期案とする。詳細は `docs/HYDRA_TRAINING.md` を参照。
+- 学習カリキュラムは A0 aux supervised no-DA で dense map supervision が学べるかを先に確認し、その後に graph no-DA stabilization、必要なら photometric OpenCV へ進む checkpoint-resume 方式を初期案とする。詳細は `docs/HYDRA_TRAINING.md` を参照。
 - 学習 stage 完了後は `best.pt` を `infer_panel_treeformer.py` / `just infer-panels` に渡し、validation split の画像ごとに input / ground truth / prediction の summary panel を repo 外へ生成して定性確認する。既定では Hydra checkpoint 内の EMA shadow weights を優先して読む。
 - batch size 12 の VRAM 目安: RTX A4500 / `DATA.MAX_SIZE=128` / official fork-source `grapevein/checkpoint_ours.pkl` / Muon + ScheduleFree 条件で、1 train batch の既存実測は約 3.1GiB。GPU EMA は model state 約 210MiB を shadow と validation backup に使うため、`ema=default` の運用目安は約 3.5-4.0GiB。8GiB 予算では batch size 12 を初期値としてよい。`nvidia-smi` の GPU 全体使用量は他プロセスを含むため、TreeFormer 単体の VRAM 目安と混同しない。
 - CUDA ops の検証は `MultiScaleDeformableAttention` module import と forward double / float check を基準にする。`models/ops/test.py` 全体は high-channel `gradcheck` まで実行するストレステストで、20GB GPU でも OOM し得るため、full test OOM を通常学習 1 batch の OOM と混同しない。
@@ -46,6 +47,7 @@
 | pretrained weights | `${TREEFORMER_ASSETS_ROOT}/pretrained_weights/fork_source_main/` | フォーク元 README の Google Drive から取得した checkpoint。repo 外管理 |
 | Hydra training | `docs/HYDRA_TRAINING.md` | Hydra entrypoint、EMA、TensorBoard、checkpoint、Muon + ScheduleFree optimizer の運用 |
 | Augmentation module | `treeformer_train/augmentations/` | AlbumentationsX/OpenCV 光学 DA と graph-aware affine / elastic DA。dataset 本体へ直書きしないための composable transform 層 |
+| Aux map training | `conf/train/aux_supervised.yaml`, `treeformer_train/aux_training.py` | graph loss を使わず segmentation / heatmap / PAF を直接 supervised する設定と epoch 実装 |
 | Inference panels | `infer_panel_treeformer.py` | 学習済み checkpoint から画像ごとの input / ground truth / prediction summary panel と graph JSON を repo 外に生成 |
 
 ## 4. タスク境界（任せること / 任せないこと）
@@ -86,6 +88,7 @@
 4. `git status --ignored --short` で checkpoint / dataset / cache が repo に混入していないことを確認し、残る ignored artifact が CUDA build artifact だけかを報告する。
 5. `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. "$TREEFORMER_PYTHON" -m pytest -p no:cacheprovider tests/test_graph_augmentations.py -q` を実行し、augmentation contract が通ることを確認する。
 6. `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. "$TREEFORMER_PYTHON" -m pytest -p no:cacheprovider tests/test_infer_panel_treeformer.py -q` を実行し、checkpoint weight selection と panel rendering helper が通ることを確認する。
+7. `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. "$TREEFORMER_PYTHON" -m pytest -p no:cacheprovider tests/test_aux_training.py tests/test_hydra_config.py -q` を実行し、aux supervised loss と Hydra config contract が通ることを確認する。
 
 ## 7. 運用ルール・変更管理
 

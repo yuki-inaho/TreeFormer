@@ -74,3 +74,21 @@ def test_hydra_curriculum_augmentation_stages_compose():
             assert cfg.DATA.AUGMENTATION.affine.enabled is affine_enabled
             assert cfg.DATA.AUGMENTATION.elastic.enabled is elastic_enabled
             assert cfg.DATA.LEGACY_ROTATE is False
+
+
+def test_hydra_aux_supervised_training_disables_graph_output():
+    with initialize_config_dir(version_base="1.3", config_dir=str(CONF_DIR)):
+        cfg = compose(config_name="config", overrides=["train=aux_supervised"])
+
+    assert cfg.TRAIN.MODE == "aux_supervised"
+    assert cfg.TRAIN.SKIP_GRAPH_OUTPUT is True
+    assert cfg.TRAIN.LOSSES == []
+    assert cfg.MODEL.GRAPH_OUTPUT_ENABLED is False
+    assert cfg.MODEL.AUX_HEAD.ENABLED is True
+    assert cfg.MODEL.AUX_HEAD.OUT_CHANNELS == 4
+    assert cfg.checkpoint.metric_name == "val/aux_total_loss"
+    assert cfg.checkpoint.pretrained_strict is False
+
+    legacy = make_legacy_config(cfg)
+    assert legacy.TRAIN.W_EDGE == 0.0
+    assert legacy.MODEL.GRAPH_OUTPUT_ENABLED is False

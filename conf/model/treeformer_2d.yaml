@@ -1,6 +1,11 @@
 # @package _global_
 MODEL:
   NUM_CLASSES: 2
+  GRAPH_OUTPUT_ENABLED: true
+  AUX_HEAD:
+    ENABLED: false
+    HIDDEN_DIM: 128
+    OUT_CHANNELS: 4
   ENCODER:
     TYPE: deformable_transformer_backbone
     NAME: deformable_transformer_backbone
