@@ -1,0 +1,45 @@
+# @package _global_
+TRAIN:
+  MODE: aux_supervised
+  SKIP_GRAPH_OUTPUT: true
+  EPOCHS: 1
+  LR: 1e-4
+  LR_BACKBONE: 3e-5
+  WEIGHT_DECAY: 1e-4
+  LR_DROP: 100
+  CLIP_MAX_NORM: 20.0
+  SAVE_PATH: ${oc.env:TREEFORMER_TRAIN_OUTPUT,${oc.env:TREEFORMER_ASSETS_ROOT,../TreeFormer_assets}/trained_weights_hydra_seg}
+  VAL_INTERVAL: 1
+  SAVE_VAL: false
+  LOSSES: []
+  W_BBOX: 0.0
+  W_CLASS: 0.0
+  W_CARD: 0.0
+  W_NODE: 0.0
+  W_EDGE: 0.0
+  W_AUX_SEG: 1.0
+  W_AUX_SEG_BCE: 1.0
+  W_AUX_SEG_DICE: 2.0
+  W_AUX_SEG_FOCAL: 0.0
+  AUX_SEG_POS_WEIGHT: auto
+  AUX_SEG_POS_WEIGHT_MAX: 4.0
+  AUX_SEG_FOCAL_ALPHA: 0.75
+  AUX_SEG_FOCAL_GAMMA: 2.0
+  AUX_SEG_THRESHOLD: 0.5
+  W_AUX_HEATMAP: 0.0
+  W_AUX_PAF: 0.0
+DATA:
+  SEGMENTATION_TARGET_SOURCE: external_mask
+MODEL:
+  GRAPH_OUTPUT_ENABLED: false
+  AUX_HEAD:
+    ENABLED: true
+    HIDDEN_DIM: 128
+    OUT_CHANNELS: 4
+checkpoint:
+  metric_name: val/seg_soft_dice_score
+  mode: max
+  pretrained_strict: false
+log:
+  exp_name: hydra_seg_supervised_smoke
+  message: Hydra-managed TreeFormer segmentation-only supervised training

@@ -92,3 +92,25 @@ def test_hydra_aux_supervised_training_disables_graph_output():
     legacy = make_legacy_config(cfg)
     assert legacy.TRAIN.W_EDGE == 0.0
     assert legacy.MODEL.GRAPH_OUTPUT_ENABLED is False
+
+
+def test_hydra_seg_supervised_training_uses_segmentation_only_losses():
+    with initialize_config_dir(version_base="1.3", config_dir=str(CONF_DIR)):
+        cfg = compose(config_name="config", overrides=["train=seg_supervised"])
+
+    assert cfg.TRAIN.MODE == "aux_supervised"
+    assert cfg.TRAIN.SKIP_GRAPH_OUTPUT is True
+    assert cfg.TRAIN.W_AUX_SEG_BCE == 1.0
+    assert cfg.TRAIN.W_AUX_SEG_DICE == 2.0
+    assert cfg.TRAIN.W_AUX_SEG_FOCAL == 0.0
+    assert cfg.TRAIN.AUX_SEG_POS_WEIGHT == "auto"
+    assert cfg.TRAIN.AUX_SEG_POS_WEIGHT_MAX == 4.0
+    assert cfg.TRAIN.W_AUX_HEATMAP == 0.0
+    assert cfg.TRAIN.W_AUX_PAF == 0.0
+    assert cfg.DATA.SEGMENTATION_TARGET_SOURCE == "external_mask"
+    assert cfg.checkpoint.metric_name == "val/seg_soft_dice_score"
+    assert cfg.checkpoint.mode == "max"
+
+    legacy = make_legacy_config(cfg)
+    assert legacy.TRAIN.W_AUX_HEATMAP == 0.0
+    assert legacy.TRAIN.W_AUX_PAF == 0.0

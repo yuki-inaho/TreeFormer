@@ -12,6 +12,14 @@ import torch.nn.functional as F
 @dataclass(frozen=True)
 class AuxLossWeights:
     segmentation: float = 1.0
+    segmentation_bce: float = 1.0
+    segmentation_dice: float = 0.0
+    segmentation_focal: float = 0.0
+    segmentation_pos_weight: float | str | None = None
+    segmentation_pos_weight_max: float = 20.0
+    segmentation_focal_alpha: float = 0.25
+    segmentation_focal_gamma: float = 2.0
+    segmentation_threshold: float = 0.5
     heatmap: float = 1.0
     paf: float = 0.25
 
@@ -29,8 +37,17 @@ def _dist_rank() -> int:
 
 
 def build_aux_loss_weights(train_config: Any) -> AuxLossWeights:
+    segmentation = float(_get(train_config, "W_AUX_SEG", 1.0))
     return AuxLossWeights(
-        segmentation=float(_get(train_config, "W_AUX_SEG", 1.0)),
+        segmentation=segmentation,
+        segmentation_bce=float(_get(train_config, "W_AUX_SEG_BCE", 1.0)),
+        segmentation_dice=float(_get(train_config, "W_AUX_SEG_DICE", 0.0)),
+        segmentation_focal=float(_get(train_config, "W_AUX_SEG_FOCAL", 0.0)),
+        segmentation_pos_weight=_get(train_config, "AUX_SEG_POS_WEIGHT", None),
+        segmentation_pos_weight_max=float(_get(train_config, "AUX_SEG_POS_WEIGHT_MAX", 20.0)),
+        segmentation_focal_alpha=float(_get(train_config, "AUX_SEG_FOCAL_ALPHA", 0.25)),
+        segmentation_focal_gamma=float(_get(train_config, "AUX_SEG_FOCAL_GAMMA", 2.0)),
+        segmentation_threshold=float(_get(train_config, "AUX_SEG_THRESHOLD", 0.5)),
         heatmap=float(_get(train_config, "W_AUX_HEATMAP", 1.0)),
         paf=float(_get(train_config, "W_AUX_PAF", 0.25)),
     )
@@ -56,6 +73,60 @@ def _resize_like(source: torch.Tensor, target: torch.Tensor, *, mode: str = "bil
     return F.interpolate(source, size=target.shape[-2:], mode=mode, align_corners=False)
 
 
+def _prepare_binary_segmentation_target(target: torch.Tensor) -> torch.Tensor:
+    if not torch.is_floating_point(target):
+        target = target.float()
+    if not torch.isfinite(target).all():
+        raise ValueError("segmentation target must contain only finite values")
+    min_value = float(target.detach().amin().item())
+    max_value = float(target.detach().amax().item())
+    if min_value < -1e-6 or max_value > 1.0 + 1e-6:
+        raise ValueError(
+            "segmentation target must be normalized to [0, 1] before loss computation; "
+            f"got min={min_value:.6g}, max={max_value:.6g}"
+        )
+    return (target > 0.5).to(dtype=target.dtype)
+
+
+def _segmentation_pos_weight(target: torch.Tensor, weights: AuxLossWeights) -> torch.Tensor | None:
+    configured = weights.segmentation_pos_weight
+    if configured is None:
+        return None
+    if isinstance(configured, str):
+        if configured.lower() != "auto":
+            raise ValueError(f"unsupported AUX_SEG_POS_WEIGHT value: {configured!r}")
+        binary_target = (target > 0.5).to(dtype=target.dtype)
+        positives = binary_target.sum().clamp_min(1.0)
+        negatives = (binary_target.numel() - binary_target.sum()).clamp_min(1.0)
+        value = (negatives / positives).clamp(max=weights.segmentation_pos_weight_max)
+    else:
+        value = torch.as_tensor(float(configured), dtype=target.dtype, device=target.device).clamp_min(0.0)
+    return value.reshape(1)
+
+
+def binary_dice_loss_with_logits(logits: torch.Tensor, target: torch.Tensor, smooth: float = 1.0) -> torch.Tensor:
+    probabilities = torch.sigmoid(logits)
+    dims = tuple(range(1, probabilities.ndim))
+    intersection = (probabilities * target).sum(dim=dims)
+    denominator = probabilities.sum(dim=dims) + target.sum(dim=dims)
+    dice = (2.0 * intersection + smooth) / (denominator + smooth)
+    return 1.0 - dice.mean()
+
+
+def binary_focal_loss_with_logits(
+    logits: torch.Tensor,
+    target: torch.Tensor,
+    *,
+    alpha: float,
+    gamma: float,
+) -> torch.Tensor:
+    bce = F.binary_cross_entropy_with_logits(logits, target, reduction="none")
+    probabilities = torch.sigmoid(logits)
+    p_t = probabilities * target + (1.0 - probabilities) * (1.0 - target)
+    alpha_t = alpha * target + (1.0 - alpha) * (1.0 - target)
+    return (alpha_t * (1.0 - p_t).pow(gamma) * bce).mean()
+
+
 def compute_aux_losses(
     output: dict[str, torch.Tensor],
     targets: dict[str, torch.Tensor],
@@ -67,7 +138,7 @@ def compute_aux_losses(
     if aux_maps.shape[1] < 4:
         raise ValueError(f"aux_maps must have at least 4 channels, got shape {tuple(aux_maps.shape)}")
 
-    seg_target = targets["segmentation"]
+    seg_target = _prepare_binary_segmentation_target(targets["segmentation"])
     heatmap_target = targets["heatmap"]
     paf_target = targets["paf"]
     paf_mask = targets["paf_mask"].to(dtype=torch.float32)
@@ -76,19 +147,35 @@ def compute_aux_losses(
     heatmap_logits = _resize_like(aux_maps[:, 1:2], heatmap_target)
     paf_pred = _resize_like(aux_maps[:, 2:4], paf_target)
 
-    seg_bce = F.binary_cross_entropy_with_logits(seg_logits, seg_target)
+    seg_pos_weight = _segmentation_pos_weight(seg_target, weights)
+    seg_bce = F.binary_cross_entropy_with_logits(seg_logits, seg_target, pos_weight=seg_pos_weight)
+    seg_dice = binary_dice_loss_with_logits(seg_logits, seg_target)
+    seg_focal = binary_focal_loss_with_logits(
+        seg_logits,
+        seg_target,
+        alpha=weights.segmentation_focal_alpha,
+        gamma=weights.segmentation_focal_gamma,
+    )
+    seg_total = (
+        weights.segmentation_bce * seg_bce
+        + weights.segmentation_dice * seg_dice
+        + weights.segmentation_focal * seg_focal
+    )
     heatmap_mse = F.mse_loss(torch.sigmoid(heatmap_logits), heatmap_target)
     paf_l1 = (torch.abs(torch.tanh(paf_pred) - paf_target) * paf_mask).sum()
     paf_l1 = paf_l1 / (paf_mask.sum().clamp_min(1.0) * paf_target.shape[1])
 
     total = (
-        weights.segmentation * seg_bce
+        weights.segmentation * seg_total
         + weights.heatmap * heatmap_mse
         + weights.paf * paf_l1
     )
     return {
         "total": total,
+        "seg_total": seg_total,
         "seg_bce": seg_bce,
+        "seg_dice": seg_dice,
+        "seg_focal": seg_focal,
         "heatmap_mse": heatmap_mse,
         "paf_l1": paf_l1,
     }
@@ -101,7 +188,7 @@ def compute_aux_eval_metrics(
 ) -> dict[str, torch.Tensor]:
     losses = compute_aux_losses(output, targets, weights)
     aux_maps = output["aux_maps"]
-    seg_target = targets["segmentation"]
+    seg_target = _prepare_binary_segmentation_target(targets["segmentation"])
     heatmap_target = targets["heatmap"]
     paf_target = targets["paf"]
     paf_mask = targets["paf_mask"].to(dtype=torch.float32)
@@ -110,11 +197,20 @@ def compute_aux_eval_metrics(
     heatmap_logits = _resize_like(aux_maps[:, 1:2], heatmap_target)
     paf_pred = _resize_like(aux_maps[:, 2:4], paf_target)
 
-    seg_pred = torch.sigmoid(seg_logits) > 0.5
+    seg_probabilities = torch.sigmoid(seg_logits)
+    seg_pred = seg_probabilities > weights.segmentation_threshold
     seg_truth = seg_target > 0.5
     intersection = torch.logical_and(seg_pred, seg_truth).sum(dtype=torch.float32)
     union = torch.logical_or(seg_pred, seg_truth).sum(dtype=torch.float32)
     seg_iou = intersection / union.clamp_min(1.0)
+    pred_positive = seg_pred.sum(dtype=torch.float32)
+    truth_positive = seg_truth.sum(dtype=torch.float32)
+    seg_precision = intersection / pred_positive.clamp_min(1.0)
+    seg_recall = intersection / truth_positive.clamp_min(1.0)
+    seg_dice_score = (2.0 * intersection) / (pred_positive + truth_positive).clamp_min(1.0)
+    seg_soft_dice_score = 1.0 - losses["seg_dice"]
+    pred_positive_rate = pred_positive / float(seg_pred.numel())
+    target_positive_rate = truth_positive / float(seg_truth.numel())
 
     heatmap_mae = torch.mean(torch.abs(torch.sigmoid(heatmap_logits) - heatmap_target))
     paf_masked_l1 = (torch.abs(torch.tanh(paf_pred) - paf_target) * paf_mask).sum()
@@ -123,6 +219,12 @@ def compute_aux_eval_metrics(
     return {
         **losses,
         "seg_iou": seg_iou,
+        "seg_dice_score": seg_dice_score,
+        "seg_soft_dice_score": seg_soft_dice_score,
+        "seg_precision": seg_precision,
+        "seg_recall": seg_recall,
+        "pred_positive_rate": pred_positive_rate,
+        "target_positive_rate": target_positive_rate,
         "heatmap_mae": heatmap_mae,
         "paf_masked_l1": paf_masked_l1,
     }
@@ -185,7 +287,7 @@ def epoch_train_aux(
                     i,
                     all_len,
                     losses["total"],
-                    losses["seg_bce"],
+                    losses["seg_total"],
                     losses["heatmap_mse"],
                     losses["paf_l1"],
                     elapsed,

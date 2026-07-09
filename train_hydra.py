@@ -149,14 +149,26 @@ def _aux_metrics_dict(
 ) -> dict[str, float]:
     metrics = {
         "train/aux_total_loss": train_metrics["total"],
+        "train/seg_total_loss": train_metrics["seg_total"],
         "train/aux_seg_bce": train_metrics["seg_bce"],
+        "train/aux_seg_dice_loss": train_metrics["seg_dice"],
+        "train/aux_seg_focal_loss": train_metrics["seg_focal"],
         "train/aux_heatmap_mse": train_metrics["heatmap_mse"],
         "train/aux_paf_l1": train_metrics["paf_l1"],
         "val/aux_total_loss": val_metrics["total"],
+        "val/seg_total_loss": val_metrics["seg_total"],
         "val/aux_seg_bce": val_metrics["seg_bce"],
+        "val/aux_seg_dice_loss": val_metrics["seg_dice"],
+        "val/aux_seg_focal_loss": val_metrics["seg_focal"],
         "val/aux_heatmap_mse": val_metrics["heatmap_mse"],
         "val/aux_paf_l1": val_metrics["paf_l1"],
         "val/seg_iou": val_metrics["seg_iou"],
+        "val/seg_dice_score": val_metrics["seg_dice_score"],
+        "val/seg_soft_dice_score": val_metrics["seg_soft_dice_score"],
+        "val/seg_precision": val_metrics["seg_precision"],
+        "val/seg_recall": val_metrics["seg_recall"],
+        "val/pred_positive_rate": val_metrics["pred_positive_rate"],
+        "val/target_positive_rate": val_metrics["target_positive_rate"],
         "val/heatmap_mae": val_metrics["heatmap_mae"],
         "val/paf_masked_l1": val_metrics["paf_masked_l1"],
         "optim/lr": lr,
@@ -360,7 +372,8 @@ def main(cfg: DictConfig) -> None:
             if aux_supervised_training:
                 print(
                     f"Epoch {epoch}/{max_epochs} | train_aux_total={train_metrics['total']:.6f} "
-                    f"| val_aux_total={val_metrics['total']:.8f} | val_seg_iou={val_metrics['seg_iou']:.6f}{best_summary}"
+                    f"| val_aux_total={val_metrics['total']:.8f} | val_seg_iou={val_metrics['seg_iou']:.6f} "
+                    f"| val_seg_dice={val_metrics['seg_dice_score']:.6f}{best_summary}"
                 )
             else:
                 print(f"Epoch {epoch}/{max_epochs} | train_total={train_total:.6f} | val_smd={val_smd:.8f}{best_summary}")

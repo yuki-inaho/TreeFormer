@@ -54,23 +54,26 @@ When graph annotations are too sparse or too rough to make `val/smd` meaningful,
 
 The aux head predicts four dense channels:
 
-- segmentation logit
+- one binary foreground segmentation logit; background is represented by target `0`
 - node heatmap logit
 - PAF x direction
 - PAF y direction
 
 The training loss is:
 
-- `train/aux_seg_bce`: BCE-with-logits against the dataloader `unet` mask
+- `train/aux_seg_bce`: binary BCE-with-logits against the dataloader external `seg/` mask
 - `train/aux_heatmap_mse`: MSE between sigmoid heatmap output and generated node heatmap
 - `train/aux_paf_l1`: masked L1 between tanh PAF output and generated PAF vectors
 
 Validation uses the same direct supervision and checkpoints on `val/aux_total_loss`. Graph losses are not computed, and the graph SMD validator is skipped. This makes the first question concrete: can the network learn the mask / heatmap / direction fields from RGB before asking it to output a clean graph.
 
+For the current stabilization work, prefer `train=seg_supervised` before the full aux-map objective. This uses only the segmentation channel, treats segmentation as background + one foreground stem class, sets heatmap and PAF loss weights to zero, and checkpoints on `val/seg_soft_dice_score`. The segmentation target must come from the split-local external TPE binary mask directory, `seg/` preferred and `unet/` accepted only as a legacy fallback. The graph-derived raster mask is not used as the segmentation target in this mode.
+
 Config-only check:
 
 ```bash
 export TREEFORMER_PRIVATE_DATA=<legacy_treeformer_dataset_root>
+just cfg-private-seg-supervised
 just cfg-private-aux-supervised
 ```
 
@@ -78,6 +81,7 @@ Short GPU smoke:
 
 ```bash
 export TREEFORMER_PRIVATE_DATA=<legacy_treeformer_dataset_root>
+just smoke-private-seg-supervised
 just smoke-private-aux-supervised
 ```
 
@@ -85,6 +89,7 @@ Full no-geometry aux stage:
 
 ```bash
 export TREEFORMER_PRIVATE_DATA=<legacy_treeformer_dataset_root>
+just train-private-seg-supervised
 just train-private-aux-supervised
 ```
 
@@ -98,14 +103,20 @@ export TREEFORMER_AUX_PANEL_OUTPUT=${TREEFORMER_ASSETS_ROOT:-../TreeFormer_asset
 just infer-aux-panels
 ```
 
-`infer_aux_panel_treeformer.py` writes one `<sample_id>_aux_panel.png` per image. The panels include input, GT/pred segmentation overlays, STDC-style detail edge maps derived from segmentation masks, GT/pred node heatmaps, and GT/pred PAF magnitude/direction maps. The detail edge map is a visualization target derived from segmentation by a multi-scale Laplacian-style boundary extractor; it is not a separate model output channel in the current 4-channel aux head.
+`infer_aux_panel_treeformer.py` writes one `<sample_id>_aux_panel.png` per image. The panels include input, GT/pred segmentation overlays, STDC-style detail edge maps derived from segmentation masks, GT/pred node heatmaps, and GT/pred PAF magnitude/direction maps. The GT segmentation overlay should be read from the same external TPE mask contract as training. The detail edge map is a visualization target derived from segmentation by a multi-scale Laplacian-style boundary extractor; it is not a separate model output channel in the current 4-channel aux head.
 
 Operational notes:
 
 - Use `augmentation=disabled` first. Do not use geometric, deformation, crop, rotate, affine, perspective, or elastic DA for this stage.
 - `checkpoint.pretrained_strict=false` is expected because the pretrained graph model has no aux head parameters.
+- `DATA.SEGMENTATION_TARGET_SOURCE=external_mask` is expected for `train=seg_supervised` and `train=aux_supervised`. Missing `seg/<sample_id>.png` or legacy `unet/<sample_id>.png` is a configuration error, not a reason to fall back silently to graph-derived labels.
+- External mask images may be stored as `0/255` PNGs; the loader thresholds them to binary float targets before BCE / Dice / Focal loss, and the loss code rejects targets outside `[0, 1]`.
+- The default segmentation loss uses binary BCE + Dice with Focal disabled. `AUX_SEG_POS_WEIGHT=auto` is capped conservatively so rare foreground does not cause broad positive overprediction.
+- Aux/seg stages may keep EMA updates enabled, but use `ema.evaluate=false` for validation and best-checkpoint selection because the aux head is newly initialized and `decay=0.9999` changes too slowly during short stages.
+- RGB input is normalized by the legacy loader with `Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])`, so model input is scaled from `[0, 1]` to `[-1, 1]`.
+- In `train=seg_supervised`, `W_AUX_HEATMAP=0` and `W_AUX_PAF=0`; heatmap and PAF channels are not trained in that stage.
 - Keep `DATA.BATCH_SIZE=12` and `DATA.MAX_SIZE=128` unless the GPU is shared or memory pressure is observed.
-- Monitor `val/aux_total_loss`, `val/seg_iou`, `val/heatmap_mae`, and `val/paf_masked_l1`; do not interpret `val/smd` for this mode because graph validation is intentionally skipped.
+- Monitor `val/seg_soft_dice_score`, `val/seg_dice_score`, `val/seg_iou`, `val/seg_precision`, `val/seg_recall`, and `val/pred_positive_rate`; do not interpret `val/smd` for this mode because graph validation is intentionally skipped. `val/seg_dice_score` and IoU are hard-threshold metrics at `AUX_SEG_THRESHOLD`; early runs may show zero while soft Dice and loss still improve.
 
 ## Augmentation
 
@@ -160,14 +171,15 @@ Recommended initial curriculum for a pretrained private legacy TreeFormer-format
 
 | Stage | Config | Epochs | LR / backbone LR | Purpose | Stop rule |
 |---|---:|---:|---:|---|---|
-| A0. Aux maps | `train=aux_supervised augmentation=disabled` | 20 | `1e-4` / `3e-5` | Confirm the RGB encoder can learn segmentation, node heatmap, and PAF direction fields from direct supervision. | Continue only if `val/aux_total_loss` declines and `val/seg_iou` improves. |
+| S0. Segmentation | `train=seg_supervised augmentation=disabled` | 20 | `1e-4` / `3e-5` | Confirm the RGB encoder can learn the external TPE binary stem mask before adding heatmap / PAF / graph objectives. | Continue only if `val/seg_soft_dice_score` or `val/seg_total_loss` improves, then check hard-threshold Dice/IoU and foreground rate for calibration. |
+| A0. Aux maps | `train=aux_supervised augmentation=disabled` | 20 | `1e-4` / `3e-5` | Add node heatmap and PAF direction supervision after segmentation is learnable. | Continue only if `val/aux_total_loss` declines without collapsing segmentation metrics. |
 | G0. Graph stabilize | `augmentation=disabled` | 20 | `3e-5` / `1e-5` | Re-enable graph output only after aux maps show learnable supervision. | Continue only if train loss declines and `val/smd` does not spike. |
 | G1. Optical | `augmentation=photometric_opencv` | 80 | `5e-5` / `1.5e-5` | Learn robustness to illumination, noise, blur, and color shifts while graph labels stay unchanged. | Use best checkpoint if `val/smd` improves; otherwise return to previous best. |
 
 Operational notes:
 
 - Use `best.pt` from the previous stage as `checkpoint.resume` for the next stage, and set `checkpoint.pretrained=null` after Stage 0.
-- Keep `DATA.BATCH_SIZE=12`, `DATA.MAX_SIZE=128`, GPU EMA, TensorBoard, and Muon + ScheduleFree unless a stage shows instability.
+- Keep `DATA.BATCH_SIZE=12`, `DATA.MAX_SIZE=128`, GPU EMA state updates, TensorBoard, and Muon + ScheduleFree unless a stage shows instability. For aux/seg stages, keep `ema.evaluate=false` so validation follows live model weights.
 - Do not use random crop, rotate, scale, affine, perspective, elastic, or graph-deformation augmentation in this curriculum.
 - Prefer the OpenCV photometric config for Stage 1. Use `regularized_albumentationsx` only after explicit license acceptance and optional dependency installation, and only for image-only photometric experiments.
 - Do not mix private dataset paths into docs, commit messages, or work records; pass them through `TREEFORMER_PRIVATE_DATA`.
@@ -175,6 +187,7 @@ Operational notes:
 Config-only checks are available:
 
 ```bash
+just cfg-private-seg-supervised
 just cfg-private-aux-supervised
 just cfg-private-curriculum-stage0
 export TREEFORMER_CURRICULUM_RESUME=<previous_stage_best_or_last_checkpoint>
@@ -188,7 +201,7 @@ just cfg-private-curriculum-stage1
 | `data` | `guyot_smoke`, `guyot_full` | Guyot dataset paths, limits, workers, seed |
 | `augmentation` | `disabled`, `photometric_opencv`, `regularized`, `regularized_albumentationsx`, `geometry_mild` | Image-only photometric DA and graph-aware affine / elastic DA |
 | `model` | `treeformer_2d` | Existing 2D TreeFormer architecture settings |
-| `train` | `default`, `dry_run`, `aux_supervised` | Epochs, loss weights, LR, save path, graph-vs-aux training mode |
+| `train` | `default`, `dry_run`, `seg_supervised`, `aux_supervised` | Epochs, loss weights, LR, save path, graph-vs-aux training mode |
 | `optimizer` | `adamw_step`, `schedulefree_adamw`, `muon_schedulefree` | Optimizer and scheduler selection |
 | `logging` | `tensorboard`, `disabled` | TensorBoard event writing |
 | `ema` | `disabled`, `default` | EMA update/evaluation behavior |
@@ -242,17 +255,27 @@ When `logging=tensorboard`, rank 0 writes scalars to `${runtime.output_dir}/tens
 For `train=aux_supervised`, expected tags instead include:
 
 - `train/aux_total_loss`
+- `train/seg_total_loss`
 - `train/aux_seg_bce`
+- `train/aux_seg_dice_loss`
+- `train/aux_seg_focal_loss`
 - `train/aux_heatmap_mse`
 - `train/aux_paf_l1`
 - `val/aux_total_loss`
+- `val/seg_total_loss`
 - `val/seg_iou`
+- `val/seg_dice_score`
+- `val/seg_soft_dice_score`
+- `val/seg_precision`
+- `val/seg_recall`
+- `val/pred_positive_rate`
+- `val/target_positive_rate`
 - `val/heatmap_mae`
 - `val/paf_masked_l1`
 
 ## EMA and checkpointing
 
-`ema=default` enables EMA updates after every optimizer step. When `ema.evaluate=true`, validation runs under EMA weights and then restores live model weights.
+`ema=default` enables EMA updates after every optimizer step. When `ema.evaluate=true`, validation runs under EMA weights and then restores live model weights. For newly initialized aux heads, prefer `ema.evaluate=false` until enough updates have accumulated; otherwise validation and qualitative panels can reflect mostly-initial EMA weights.
 
 Checkpoints are written by `CheckpointManager`:
 
@@ -264,7 +287,7 @@ Each checkpoint stores model, optimizer, scheduler, metrics, EMA state, and reso
 
 ## Post-training inference panels
 
-After a stage finishes, render per-image summary panels from `best.pt` before deciding whether to keep the stage. The renderer reads current Hydra checkpoints, including embedded resolved config and EMA shadow weights. With `--weights auto`, EMA weights are preferred because validation also runs under EMA when `ema.evaluate=true`.
+After a stage finishes, render per-image summary panels from `best.pt` before deciding whether to keep the stage. The renderer reads current Hydra checkpoints, including embedded resolved config and EMA shadow weights. With `--weights auto`, EMA weights are preferred because validation also runs under EMA when `ema.evaluate=true`. For `train=seg_supervised` and `train=aux_supervised` runs using `ema.evaluate=false`, render aux panels with `--weights model`; the `just infer-aux-panels` recipe defaults to that behavior.
 
 For a legacy TreeFormer-format dataset, keep the concrete dataset root in the environment:
 

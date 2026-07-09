@@ -3,12 +3,15 @@ import random
 import yaml
 # import sys
 import json
+import copy
 # from argparse import ArgumentParser
+from math import atan2, degrees
+
 import numpy as np
 
 import argparse
 from torchvision import transforms
-from torch.utils.data import Dataset, DataLoader, sampler
+from torch.utils.data import Dataset, DataLoader
 from matplotlib import pyplot as plt
 import torch
 import torchvision.transforms.functional as TF
@@ -49,8 +52,6 @@ def find_segments_v2(start_node, node_collections, branching_nodes, end_nodes):
     dfs(start_node, [])
 
     return segments
-########################################################################################################################
-from math import atan2, degrees
 def calculate_angle(point1, point2):
     delta_x = point2[0] - point1[0]
     delta_y = point2[1] - point1[1]
@@ -63,8 +64,6 @@ def sort_segments_v3(segments, points, branching_nodes):
 
     for segment in segments:
         start_node = segment[0]
-        end_node = segment[-1]
-
         if tuple(segment) in processed_segments:
             continue
 
@@ -114,8 +113,6 @@ def generate_PAFs(height, width, points, paths, line_thickness=2):
                     PAFs[y - line_thickness:y + line_thickness, x - line_thickness:x + line_thickness, 1] = uy
 
     return PAFs
-##############################################################
-import copy
 def create_mask_with_polylines(image_shape, keypoints, segments, thickness=2):
     kpts = copy.deepcopy(keypoints)
     # Scale keypoints to match the image dimensions
@@ -162,10 +159,14 @@ def load_detr_dataset(tgt_data_path):
 #########################################################################################################
 class LoadCNNDataset(Dataset):
     def __init__(self, parent_path, max_size=1000,
-                 max_change_light_rate=0.3, is_train=True, is_rotate=False, sample_transform=None):
+                 max_change_light_rate=0.3, is_train=True, is_rotate=False, sample_transform=None,
+                 segmentation_target_source="auto"):
         self.parent_path = parent_path
         self.tgt_data_path = os.path.join(parent_path, "data")
         self.img_path = os.path.join(parent_path, "img")
+        self.seg_path = os.path.join(parent_path, "seg")
+        self.unet_path = os.path.join(parent_path, "unet")
+        self.segmentation_mask_paths = [self.seg_path, self.unet_path]
         self.file_list = self.processed_file_names
 
         ids1, (list_DETR_points_left_up, list_DETR_node_collections) = load_detr_dataset(self.tgt_data_path)
@@ -179,6 +180,15 @@ class LoadCNNDataset(Dataset):
         self.is_train = is_train
         self.is_rotate = is_rotate
         self.sample_transform = sample_transform
+        self.segmentation_target_source = str(segmentation_target_source or "auto").lower()
+        allowed_segmentation_sources = {"auto", "external_mask", "graph"}
+        if self.segmentation_target_source not in allowed_segmentation_sources:
+            raise ValueError(
+                "segmentation_target_source must be one of "
+                f"{sorted(allowed_segmentation_sources)}, got {segmentation_target_source!r}"
+            )
+        if self.segmentation_target_source == "external_mask" and self.is_rotate:
+            raise ValueError("external segmentation masks cannot be used with legacy rotation enabled")
 
 
     @property
@@ -305,6 +315,49 @@ class LoadCNNDataset(Dataset):
         heatmap_tensor = torch.tensor(heatmap, dtype=torch.float32)
 
         return PAFs_tensor, mask_tensor, unet_tensor, heatmap_tensor
+
+    def _find_external_mask_path(self, sample_stem):
+        for mask_dir in self.segmentation_mask_paths:
+            if not os.path.isdir(mask_dir):
+                continue
+            for suffix in (".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp"):
+                candidate = os.path.join(mask_dir, sample_stem + suffix)
+                if os.path.exists(candidate):
+                    return candidate
+        return None
+
+    def _load_external_unet_mask(self, sample_stem, expected_hw):
+        if self.segmentation_target_source == "graph":
+            return None
+
+        mask_path = self._find_external_mask_path(sample_stem)
+        if mask_path is None:
+            if self.segmentation_target_source == "external_mask":
+                raise FileNotFoundError(
+                    f"missing external segmentation mask for sample {sample_stem!r} under "
+                    f"{self.segmentation_mask_paths}"
+                )
+            return None
+
+        mask = cv2.imread(mask_path, cv2.IMREAD_UNCHANGED)
+        if mask is None:
+            raise ValueError(f"failed to read external segmentation mask: {mask_path}")
+        if mask.ndim == 3:
+            mask = mask[:, :, 0]
+        if mask.shape[:2] != tuple(expected_hw):
+            mask = cv2.resize(mask, (int(expected_hw[1]), int(expected_hw[0])), interpolation=cv2.INTER_NEAREST)
+
+        mask_float = mask.astype(np.float32)
+        if mask_float.max(initial=0.0) > 1.0:
+            mask_float = (mask_float > 127.0).astype(np.float32)
+        else:
+            mask_float = (mask_float > 0.5).astype(np.float32)
+        return mask_float
+
+    @staticmethod
+    def _resize_binary_mask(mask, output_hw):
+        resized = cv2.resize(mask.astype(np.float32), (int(output_hw[1]), int(output_hw[0])), interpolation=cv2.INTER_NEAREST)
+        return torch.tensor((resized > 0.5).astype(np.float32))
 
     def _augment_one_sample(self, check_img, nodes_list):
         height, width, channels = check_img.shape
@@ -581,6 +634,7 @@ class LoadCNNDataset(Dataset):
         if len(plt_img.shape) == 3 and plt_img.shape[2] == 4:
             plt_img = plt_img[:, :, :3]  # 最后一层为阿尔法 透明度全是1
         input_img = copy.deepcopy(plt_img)
+        external_unet_mask = self._load_external_unet_mask(label_img_name0, input_img.shape[:2])
         if self.sample_transform is not None:
             from treeformer_train.augmentations import as_graph_sample
 
@@ -604,7 +658,10 @@ class LoadCNNDataset(Dataset):
         else:
             feature_img = input_img
             nodes = list_DETR_points_left_up_idx
-        list_DETR_points_left_up = torch.tensor(nodes, dtype=torch.float)
+        if isinstance(nodes, torch.Tensor):
+            list_DETR_points_left_up = nodes.clone().detach().to(dtype=torch.float)
+        else:
+            list_DETR_points_left_up = torch.tensor(nodes, dtype=torch.float)
 
         if len(feature_img.shape) == 3 and feature_img.shape[2] == 3:
             transform_feature = transforms.Compose(
@@ -629,6 +686,9 @@ class LoadCNNDataset(Dataset):
                 new_height = self.max_size
                 new_width = int(cut_width * scale)
             feature_img = TF.resize(feature_img, size=[new_height, new_width])
+        external_unet_idx = None
+        if external_unet_mask is not None:
+            external_unet_idx = self._resize_binary_mask(external_unet_mask, feature_img.shape[1:])
 
         # 旋转
         if self.is_rotate:
@@ -683,6 +743,8 @@ class LoadCNNDataset(Dataset):
                 sigma=3, unet_thickness=3, mask_thickness=6
             )
 
+        if external_unet_idx is not None:
+            unet_idx = external_unet_idx
 
         return (feature_img.contiguous(), label_img_name0,
                 list_DETR_points_left_up, list_DETR_node_collections_idx,
@@ -784,10 +846,13 @@ def build_train_val_datasets(data_config):
 
     train_sample_transform = build_graph_augmentation(_get_data_attr(data_config, "AUGMENTATION", None))
     legacy_rotate = bool(_get_data_attr(data_config, "LEGACY_ROTATE", True))
+    segmentation_target_source = _get_data_attr(data_config, "SEGMENTATION_TARGET_SOURCE", "auto")
     train_dataset = LoadCNNDataset(parent_path=train_path, max_size=data_config.MAX_SIZE, max_change_light_rate=0.3,
-                                   is_train=False, is_rotate=legacy_rotate, sample_transform=train_sample_transform)
+                                   is_train=False, is_rotate=legacy_rotate, sample_transform=train_sample_transform,
+                                   segmentation_target_source=segmentation_target_source)
     val_dataset = LoadCNNDataset(parent_path=val_path, max_size=data_config.MAX_SIZE, max_change_light_rate=0.3,
-                                 is_train=False, is_rotate=False)
+                                 is_train=False, is_rotate=False,
+                                 segmentation_target_source=segmentation_target_source)
     return (
         _limit_dataset(train_dataset, _get_data_attr(data_config, "TRAIN_LIMIT")),
         _limit_dataset(val_dataset, _get_data_attr(data_config, "VAL_LIMIT")),

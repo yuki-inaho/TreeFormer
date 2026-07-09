@@ -8,6 +8,7 @@ private_pretrained_output := env_var_or_default("TREEFORMER_TRAIN_OUTPUT", asset
 private_pretrained_aug_output := env_var_or_default("TREEFORMER_TRAIN_OUTPUT_AUG", assets_root + "/trained_weights_hydra_private_pretrained_aug")
 private_pretrained_curriculum_output := env_var_or_default("TREEFORMER_TRAIN_OUTPUT_CURRICULUM", assets_root + "/trained_weights_hydra_private_curriculum")
 private_aux_output := env_var_or_default("TREEFORMER_TRAIN_OUTPUT_AUX", assets_root + "/trained_weights_hydra_aux_supervised")
+private_seg_output := env_var_or_default("TREEFORMER_TRAIN_OUTPUT_SEG", assets_root + "/trained_weights_hydra_seg_supervised")
 aux_panel_output := env_var_or_default("TREEFORMER_AUX_PANEL_OUTPUT", assets_root + "/aux_inference_panels")
 
 hydra-cfg:
@@ -55,7 +56,7 @@ infer-panels:
 infer-aux-panels:
     @test -n "{{private_treeformer_data}}" || (echo "Set TREEFORMER_PRIVATE_DATA to a legacy TreeFormer dataset root" >&2; exit 2)
     @test -n "${TREEFORMER_AUX_CHECKPOINT:-}" || (echo "Set TREEFORMER_AUX_CHECKPOINT to an aux-supervised best.pt or last.pt checkpoint" >&2; exit 2)
-    @PYTHONPATH=. CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0} {{python}} infer_aux_panel_treeformer.py --legacy-split-root "{{private_treeformer_data}}/val" --checkpoint "${TREEFORMER_AUX_CHECKPOINT}" --output-dir "{{aux_panel_output}}" --device cuda --max-size 128 --limit "${TREEFORMER_AUX_PANEL_LIMIT:-10}" --save-json
+    @PYTHONPATH=. CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0} {{python}} infer_aux_panel_treeformer.py --legacy-split-root "{{private_treeformer_data}}/val" --checkpoint "${TREEFORMER_AUX_CHECKPOINT}" --output-dir "{{aux_panel_output}}" --device cuda --max-size 128 --limit "${TREEFORMER_AUX_PANEL_LIMIT:-10}" --weights "${TREEFORMER_AUX_WEIGHTS:-model}" --save-json
 
 cfg-private-curriculum-stage0:
     @test -n "{{private_treeformer_data}}" || (echo "Set TREEFORMER_PRIVATE_DATA to a legacy TreeFormer dataset root" >&2; exit 2)
@@ -67,12 +68,24 @@ cfg-private-curriculum-stage1:
 
 cfg-private-aux-supervised:
     @test -n "{{private_treeformer_data}}" || (echo "Set TREEFORMER_PRIVATE_DATA to a legacy TreeFormer dataset root" >&2; exit 2)
-    @PYTHONPATH=. {{python}} train_hydra.py --cfg job train=aux_supervised augmentation=disabled optimizer=muon_schedulefree ema=default logging=tensorboard checkpoint.pretrained={{fork_grapevine_pretrained}} checkpoint.pretrained_key=net DATA.DATASET=treeformer-2D DATA.DATA_PATH="{{private_treeformer_data}}" DATA.BATCH_SIZE=12 DATA.MAX_SIZE=128 DATA.NUM_WORKERS=0 DATA.TRAIN_LIMIT=null DATA.VAL_LIMIT=null TRAIN.SAVE_PATH={{private_aux_output}} TRAIN.EPOCHS=20 TRAIN.LR=1e-4 TRAIN.LR_BACKBONE=3e-5 log.exp_name=private_aux_supervised_no_da
+    @PYTHONPATH=. {{python}} train_hydra.py --cfg job train=aux_supervised augmentation=disabled optimizer=muon_schedulefree ema=default ema.evaluate=false logging=tensorboard checkpoint.pretrained={{fork_grapevine_pretrained}} checkpoint.pretrained_key=net DATA.DATASET=treeformer-2D DATA.DATA_PATH="{{private_treeformer_data}}" DATA.BATCH_SIZE=12 DATA.MAX_SIZE=128 DATA.NUM_WORKERS=0 DATA.TRAIN_LIMIT=null DATA.VAL_LIMIT=null TRAIN.SAVE_PATH={{private_aux_output}} TRAIN.EPOCHS=20 TRAIN.LR=1e-4 TRAIN.LR_BACKBONE=3e-5 log.exp_name=private_aux_supervised_no_da
 
 smoke-private-aux-supervised:
     @test -n "{{private_treeformer_data}}" || (echo "Set TREEFORMER_PRIVATE_DATA to a legacy TreeFormer dataset root" >&2; exit 2)
-    @PYTHONPATH=. CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0} {{python}} train_hydra.py train=aux_supervised augmentation=disabled optimizer=muon_schedulefree ema=default logging=tensorboard checkpoint.pretrained={{fork_grapevine_pretrained}} checkpoint.pretrained_key=net DATA.DATASET=treeformer-2D DATA.DATA_PATH="{{private_treeformer_data}}" DATA.BATCH_SIZE=12 DATA.MAX_SIZE=128 DATA.NUM_WORKERS=0 DATA.TRAIN_LIMIT=24 DATA.VAL_LIMIT=12 TRAIN.SAVE_PATH={{private_aux_output}} TRAIN.EPOCHS=3 TRAIN.LR=1e-4 TRAIN.LR_BACKBONE=3e-5 log.exp_name=private_aux_supervised_smoke_no_da
+    @PYTHONPATH=. CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0} {{python}} train_hydra.py train=aux_supervised augmentation=disabled optimizer=muon_schedulefree ema=default ema.evaluate=false logging=tensorboard checkpoint.pretrained={{fork_grapevine_pretrained}} checkpoint.pretrained_key=net DATA.DATASET=treeformer-2D DATA.DATA_PATH="{{private_treeformer_data}}" DATA.BATCH_SIZE=12 DATA.MAX_SIZE=128 DATA.NUM_WORKERS=0 DATA.TRAIN_LIMIT=24 DATA.VAL_LIMIT=12 TRAIN.SAVE_PATH={{private_aux_output}} TRAIN.EPOCHS=3 TRAIN.LR=1e-4 TRAIN.LR_BACKBONE=3e-5 log.exp_name=private_aux_supervised_smoke_no_da
 
 train-private-aux-supervised:
     @test -n "{{private_treeformer_data}}" || (echo "Set TREEFORMER_PRIVATE_DATA to a legacy TreeFormer dataset root" >&2; exit 2)
-    @PYTHONPATH=. CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0} {{python}} train_hydra.py train=aux_supervised augmentation=disabled optimizer=muon_schedulefree ema=default logging=tensorboard checkpoint.pretrained={{fork_grapevine_pretrained}} checkpoint.pretrained_key=net DATA.DATASET=treeformer-2D DATA.DATA_PATH="{{private_treeformer_data}}" DATA.BATCH_SIZE=12 DATA.MAX_SIZE=128 DATA.NUM_WORKERS=0 DATA.TRAIN_LIMIT=null DATA.VAL_LIMIT=null TRAIN.SAVE_PATH={{private_aux_output}} TRAIN.EPOCHS=20 TRAIN.LR=1e-4 TRAIN.LR_BACKBONE=3e-5 log.exp_name=private_aux_supervised_no_da
+    @PYTHONPATH=. CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0} {{python}} train_hydra.py train=aux_supervised augmentation=disabled optimizer=muon_schedulefree ema=default ema.evaluate=false logging=tensorboard checkpoint.pretrained={{fork_grapevine_pretrained}} checkpoint.pretrained_key=net DATA.DATASET=treeformer-2D DATA.DATA_PATH="{{private_treeformer_data}}" DATA.BATCH_SIZE=12 DATA.MAX_SIZE=128 DATA.NUM_WORKERS=0 DATA.TRAIN_LIMIT=null DATA.VAL_LIMIT=null TRAIN.SAVE_PATH={{private_aux_output}} TRAIN.EPOCHS=20 TRAIN.LR=1e-4 TRAIN.LR_BACKBONE=3e-5 log.exp_name=private_aux_supervised_no_da
+
+cfg-private-seg-supervised:
+    @test -n "{{private_treeformer_data}}" || (echo "Set TREEFORMER_PRIVATE_DATA to a legacy TreeFormer dataset root" >&2; exit 2)
+    @PYTHONPATH=. {{python}} train_hydra.py --cfg job train=seg_supervised augmentation=disabled optimizer=muon_schedulefree ema=default ema.evaluate=false logging=tensorboard checkpoint.pretrained={{fork_grapevine_pretrained}} checkpoint.pretrained_key=net DATA.DATASET=treeformer-2D DATA.DATA_PATH="{{private_treeformer_data}}" DATA.BATCH_SIZE=12 DATA.MAX_SIZE=128 DATA.NUM_WORKERS=0 DATA.TRAIN_LIMIT=null DATA.VAL_LIMIT=null TRAIN.SAVE_PATH={{private_seg_output}} TRAIN.EPOCHS=20 TRAIN.LR=1e-4 TRAIN.LR_BACKBONE=3e-5 log.exp_name=private_seg_supervised_no_da
+
+smoke-private-seg-supervised:
+    @test -n "{{private_treeformer_data}}" || (echo "Set TREEFORMER_PRIVATE_DATA to a legacy TreeFormer dataset root" >&2; exit 2)
+    @PYTHONPATH=. CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0} {{python}} train_hydra.py train=seg_supervised augmentation=disabled optimizer=muon_schedulefree ema=default ema.evaluate=false logging=tensorboard checkpoint.pretrained={{fork_grapevine_pretrained}} checkpoint.pretrained_key=net DATA.DATASET=treeformer-2D DATA.DATA_PATH="{{private_treeformer_data}}" DATA.BATCH_SIZE=12 DATA.MAX_SIZE=128 DATA.NUM_WORKERS=0 DATA.TRAIN_LIMIT=24 DATA.VAL_LIMIT=12 TRAIN.SAVE_PATH={{private_seg_output}} TRAIN.EPOCHS=3 TRAIN.LR=1e-4 TRAIN.LR_BACKBONE=3e-5 log.exp_name=private_seg_supervised_smoke_no_da
+
+train-private-seg-supervised:
+    @test -n "{{private_treeformer_data}}" || (echo "Set TREEFORMER_PRIVATE_DATA to a legacy TreeFormer dataset root" >&2; exit 2)
+    @PYTHONPATH=. CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0} {{python}} train_hydra.py train=seg_supervised augmentation=disabled optimizer=muon_schedulefree ema=default ema.evaluate=false logging=tensorboard checkpoint.pretrained={{fork_grapevine_pretrained}} checkpoint.pretrained_key=net DATA.DATASET=treeformer-2D DATA.DATA_PATH="{{private_treeformer_data}}" DATA.BATCH_SIZE=12 DATA.MAX_SIZE=128 DATA.NUM_WORKERS=0 DATA.TRAIN_LIMIT=null DATA.VAL_LIMIT=null TRAIN.SAVE_PATH={{private_seg_output}} TRAIN.EPOCHS=20 TRAIN.LR=1e-4 TRAIN.LR_BACKBONE=3e-5 log.exp_name=private_seg_supervised_no_da
