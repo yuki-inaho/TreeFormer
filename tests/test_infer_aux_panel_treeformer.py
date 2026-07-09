@@ -23,6 +23,7 @@ def test_make_detail_edge_map_finds_square_boundary():
     assert edge.max() == 1.0
     assert edge.sum() > 0
     assert edge[20, 32] == 1.0
+    assert edge[32, 32] == 0.0
     assert edge[0, 0] == 0.0
 
 
@@ -75,3 +76,39 @@ def test_make_aux_panel_and_summary_json(tmp_path: Path):
     assert panel_path.is_file()
     assert isinstance(panel, Image.Image)
     assert '"sample_id": "sample"' in json_path.read_text(encoding="utf-8")
+
+
+def test_make_aux_panel_can_render_trained_detail_boundary(tmp_path: Path):
+    image = torch.zeros(3, 16, 16)
+    gt_segmentation = torch.zeros(16, 16)
+    gt_segmentation[4:12, 4:12] = 1.0
+    gt_heatmap = torch.zeros(16, 16)
+    gt_paf = torch.zeros(16, 16, 2)
+    prediction = {
+        "segmentation": gt_segmentation.clone(),
+        "heatmap": gt_heatmap.clone(),
+        "paf": gt_paf.permute(2, 0, 1).clone(),
+        "detail_boundary": make_detail_edge_map(gt_segmentation),
+    }
+
+    panel = make_aux_panel(
+        image=image,
+        gt_segmentation=gt_segmentation,
+        gt_heatmap=gt_heatmap,
+        gt_paf=gt_paf,
+        prediction=prediction,
+        columns=3,
+        panel_width=64,
+        pad=4,
+    )
+    panel.save(tmp_path / "detail_panel.png")
+    json_path = tmp_path / "detail_summary.json"
+    write_aux_summary_json(
+        json_path,
+        sample_id="sample",
+        prediction=prediction,
+        targets={"segmentation": gt_segmentation, "heatmap": gt_heatmap, "paf": gt_paf.permute(2, 0, 1)},
+    )
+
+    assert panel.width > 0
+    assert "pred_detail_boundary_mean" in json_path.read_text(encoding="utf-8")

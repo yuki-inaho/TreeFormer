@@ -86,6 +86,7 @@ def test_hydra_aux_supervised_training_disables_graph_output():
     assert cfg.MODEL.GRAPH_OUTPUT_ENABLED is False
     assert cfg.MODEL.AUX_HEAD.ENABLED is True
     assert cfg.MODEL.AUX_HEAD.OUT_CHANNELS == 4
+    assert cfg.TRAIN.W_AUX_DETAIL == 0.0
     assert cfg.checkpoint.metric_name == "val/aux_total_loss"
     assert cfg.checkpoint.pretrained_strict is False
 
@@ -105,8 +106,13 @@ def test_hydra_seg_supervised_training_uses_segmentation_only_losses():
     assert cfg.TRAIN.W_AUX_SEG_FOCAL == 0.0
     assert cfg.TRAIN.AUX_SEG_POS_WEIGHT == "auto"
     assert cfg.TRAIN.AUX_SEG_POS_WEIGHT_MAX == 4.0
+    assert cfg.TRAIN.W_AUX_DETAIL == 0.1
+    assert cfg.TRAIN.W_AUX_DETAIL_BCE == 1.0
+    assert cfg.TRAIN.W_AUX_DETAIL_DICE == 1.0
+    assert cfg.TRAIN.AUX_DETAIL_SUPPORT_KERNEL_SIZE == 3
     assert cfg.TRAIN.W_AUX_HEATMAP == 0.0
     assert cfg.TRAIN.W_AUX_PAF == 0.0
+    assert cfg.MODEL.AUX_HEAD.OUT_CHANNELS == 5
     assert cfg.DATA.SEGMENTATION_TARGET_SOURCE == "external_mask"
     assert cfg.checkpoint.metric_name == "val/seg_soft_dice_score"
     assert cfg.checkpoint.mode == "max"

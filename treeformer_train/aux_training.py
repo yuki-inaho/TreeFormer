@@ -8,6 +8,8 @@ import torch
 import torch.distributed as dist
 import torch.nn.functional as F
 
+from .detail_targets import make_stdc_detail_boundary_target
+
 
 @dataclass(frozen=True)
 class AuxLossWeights:
@@ -20,6 +22,13 @@ class AuxLossWeights:
     segmentation_focal_alpha: float = 0.25
     segmentation_focal_gamma: float = 2.0
     segmentation_threshold: float = 0.5
+    detail: float = 0.0
+    detail_bce: float = 1.0
+    detail_dice: float = 1.0
+    detail_threshold: float = 0.1
+    detail_scales: tuple[int, ...] = (1, 2, 4)
+    detail_support_kernel_size: int = 3
+    detail_eval_threshold: float = 0.5
     heatmap: float = 1.0
     paf: float = 0.25
 
@@ -28,6 +37,14 @@ def _get(config: Any, key: str, default: Any = None) -> Any:
     if isinstance(config, dict):
         return config.get(key, default)
     return getattr(config, key, default)
+
+
+def _as_int_tuple(value: Any, default: tuple[int, ...]) -> tuple[int, ...]:
+    if value is None:
+        return default
+    if isinstance(value, str):
+        return tuple(int(item.strip()) for item in value.split(",") if item.strip())
+    return tuple(int(item) for item in value)
 
 
 def _dist_rank() -> int:
@@ -48,6 +65,13 @@ def build_aux_loss_weights(train_config: Any) -> AuxLossWeights:
         segmentation_focal_alpha=float(_get(train_config, "AUX_SEG_FOCAL_ALPHA", 0.25)),
         segmentation_focal_gamma=float(_get(train_config, "AUX_SEG_FOCAL_GAMMA", 2.0)),
         segmentation_threshold=float(_get(train_config, "AUX_SEG_THRESHOLD", 0.5)),
+        detail=float(_get(train_config, "W_AUX_DETAIL", 0.0)),
+        detail_bce=float(_get(train_config, "W_AUX_DETAIL_BCE", 1.0)),
+        detail_dice=float(_get(train_config, "W_AUX_DETAIL_DICE", 1.0)),
+        detail_threshold=float(_get(train_config, "AUX_DETAIL_THRESHOLD", 0.1)),
+        detail_scales=_as_int_tuple(_get(train_config, "AUX_DETAIL_SCALES", None), (1, 2, 4)),
+        detail_support_kernel_size=int(_get(train_config, "AUX_DETAIL_SUPPORT_KERNEL_SIZE", 3)),
+        detail_eval_threshold=float(_get(train_config, "AUX_DETAIL_EVAL_THRESHOLD", 0.5)),
         heatmap=float(_get(train_config, "W_AUX_HEATMAP", 1.0)),
         paf=float(_get(train_config, "W_AUX_PAF", 0.25)),
     )
@@ -137,6 +161,8 @@ def compute_aux_losses(
         raise KeyError("model output must contain 'aux_maps' for aux supervised training")
     if aux_maps.shape[1] < 4:
         raise ValueError(f"aux_maps must have at least 4 channels, got shape {tuple(aux_maps.shape)}")
+    if weights.detail > 0.0 and aux_maps.shape[1] < 5:
+        raise ValueError("detail boundary loss requires MODEL.AUX_HEAD.OUT_CHANNELS>=5")
 
     seg_target = _prepare_binary_segmentation_target(targets["segmentation"])
     heatmap_target = targets["heatmap"]
@@ -161,12 +187,28 @@ def compute_aux_losses(
         + weights.segmentation_dice * seg_dice
         + weights.segmentation_focal * seg_focal
     )
+    zero = seg_total.new_zeros(())
+    detail_bce = zero
+    detail_dice = zero
+    detail_total = zero
+    if aux_maps.shape[1] >= 5:
+        detail_target = make_stdc_detail_boundary_target(
+            seg_target,
+            threshold=weights.detail_threshold,
+            scales=weights.detail_scales,
+            support_kernel_size=weights.detail_support_kernel_size,
+        )
+        detail_logits = _resize_like(aux_maps[:, 4:5], detail_target)
+        detail_bce = F.binary_cross_entropy_with_logits(detail_logits, detail_target)
+        detail_dice = binary_dice_loss_with_logits(detail_logits, detail_target)
+        detail_total = weights.detail_bce * detail_bce + weights.detail_dice * detail_dice
     heatmap_mse = F.mse_loss(torch.sigmoid(heatmap_logits), heatmap_target)
     paf_l1 = (torch.abs(torch.tanh(paf_pred) - paf_target) * paf_mask).sum()
     paf_l1 = paf_l1 / (paf_mask.sum().clamp_min(1.0) * paf_target.shape[1])
 
     total = (
         weights.segmentation * seg_total
+        + weights.detail * detail_total
         + weights.heatmap * heatmap_mse
         + weights.paf * paf_l1
     )
@@ -176,6 +218,9 @@ def compute_aux_losses(
         "seg_bce": seg_bce,
         "seg_dice": seg_dice,
         "seg_focal": seg_focal,
+        "detail_total": detail_total,
+        "detail_bce": detail_bce,
+        "detail_dice": detail_dice,
         "heatmap_mse": heatmap_mse,
         "paf_l1": paf_l1,
     }
@@ -215,6 +260,32 @@ def compute_aux_eval_metrics(
     heatmap_mae = torch.mean(torch.abs(torch.sigmoid(heatmap_logits) - heatmap_target))
     paf_masked_l1 = (torch.abs(torch.tanh(paf_pred) - paf_target) * paf_mask).sum()
     paf_masked_l1 = paf_masked_l1 / (paf_mask.sum().clamp_min(1.0) * paf_target.shape[1])
+    if aux_maps.shape[1] >= 5:
+        detail_target = make_stdc_detail_boundary_target(
+            seg_target,
+            threshold=weights.detail_threshold,
+            scales=weights.detail_scales,
+            support_kernel_size=weights.detail_support_kernel_size,
+        )
+        detail_logits = _resize_like(aux_maps[:, 4:5], detail_target)
+        detail_probabilities = torch.sigmoid(detail_logits)
+        detail_pred = detail_probabilities > weights.detail_eval_threshold
+        detail_truth = detail_target > 0.5
+        detail_intersection = torch.logical_and(detail_pred, detail_truth).sum(dtype=torch.float32)
+        detail_union = torch.logical_or(detail_pred, detail_truth).sum(dtype=torch.float32)
+        detail_pred_positive = detail_pred.sum(dtype=torch.float32)
+        detail_truth_positive = detail_truth.sum(dtype=torch.float32)
+        detail_iou = detail_intersection / detail_union.clamp_min(1.0)
+        detail_dice_score = (2.0 * detail_intersection) / (detail_pred_positive + detail_truth_positive).clamp_min(1.0)
+        detail_soft_dice_score = 1.0 - losses["detail_dice"]
+        detail_pred_positive_rate = detail_pred_positive / float(detail_pred.numel())
+        detail_target_positive_rate = detail_truth_positive / float(detail_truth.numel())
+    else:
+        detail_iou = seg_iou.new_zeros(())
+        detail_dice_score = seg_iou.new_zeros(())
+        detail_soft_dice_score = seg_iou.new_zeros(())
+        detail_pred_positive_rate = seg_iou.new_zeros(())
+        detail_target_positive_rate = seg_iou.new_zeros(())
 
     return {
         **losses,
@@ -225,6 +296,11 @@ def compute_aux_eval_metrics(
         "seg_recall": seg_recall,
         "pred_positive_rate": pred_positive_rate,
         "target_positive_rate": target_positive_rate,
+        "detail_iou": detail_iou,
+        "detail_dice_score": detail_dice_score,
+        "detail_soft_dice_score": detail_soft_dice_score,
+        "detail_pred_positive_rate": detail_pred_positive_rate,
+        "detail_target_positive_rate": detail_target_positive_rate,
         "heatmap_mae": heatmap_mae,
         "paf_masked_l1": paf_masked_l1,
     }

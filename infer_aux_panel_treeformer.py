@@ -3,7 +3,7 @@
 
 The aux head emits segmentation, node heatmap and PAF direction maps.  This
 script compares those predictions against the legacy dataloader targets and
-also renders a STDC-style detail edge map derived from the segmentation mask.
+can render optional STDC-style detail boundary maps.
 """
 
 from __future__ import annotations
@@ -28,6 +28,7 @@ from infer_panel_treeformer import (
     make_panel_grid,
     select_state_dict,
 )
+from treeformer_train.detail_targets import make_stdc_detail_boundary_target
 
 
 def _resampling_bilinear() -> int:
@@ -105,37 +106,9 @@ def paf_to_rgb(paf: torch.Tensor | np.ndarray) -> Image.Image:
 
 
 def make_detail_edge_map(mask: torch.Tensor, *, threshold: float = 0.1, scales: tuple[int, ...] = (1, 2, 4)) -> torch.Tensor:
-    """Create an STDC-style multi-scale detail edge map from a dense mask."""
+    """Create the STDC-style boundary target used by optional detail supervision."""
 
-    mask = mask.detach().float()
-    if mask.ndim == 2:
-        mask = mask[None, None]
-    elif mask.ndim == 3:
-        mask = mask[None]
-    if mask.ndim != 4 or mask.shape[1] != 1:
-        raise ValueError(f"mask must be [H,W], [1,H,W] or [N,1,H,W], got {tuple(mask.shape)}")
-
-    kernel = torch.tensor(
-        [[-1.0, -1.0, -1.0], [-1.0, 8.0, -1.0], [-1.0, -1.0, -1.0]],
-        device=mask.device,
-        dtype=mask.dtype,
-    ).view(1, 1, 3, 3)
-    height, width = mask.shape[-2:]
-    edges = []
-    for scale in scales:
-        if scale <= 1:
-            scaled = mask
-        else:
-            scaled = F.interpolate(mask, scale_factor=1.0 / float(scale), mode="bilinear", align_corners=False)
-        edge = F.conv2d(scaled, kernel, padding=1).abs()
-        edge = (edge > threshold).to(dtype=mask.dtype)
-        if edge.shape[-2:] != (height, width):
-            edge = F.interpolate(edge, size=(height, width), mode="nearest")
-        edges.append(edge)
-    combined = torch.stack(edges, dim=0).amax(dim=0)
-    fine_support = F.max_pool2d(edges[0], kernel_size=5, stride=1, padding=2)
-    combined = combined * fine_support
-    return combined.squeeze(0).squeeze(0).clamp(0.0, 1.0)
+    return make_stdc_detail_boundary_target(mask, threshold=threshold, scales=scales, support_kernel_size=3).squeeze(0).squeeze(0)
 
 
 def resize_aux_maps(aux_maps: torch.Tensor, target_size: tuple[int, int]) -> torch.Tensor:
@@ -182,11 +155,14 @@ def predict_aux_maps(model: torch.nn.Module, image: torch.Tensor, device: torch.
         if aux_maps is None:
             raise KeyError("model output does not contain aux_maps")
         aux_maps = resize_aux_maps(aux_maps.detach().cpu(), target_size)[0]
-    return {
+    prediction = {
         "segmentation": torch.sigmoid(aux_maps[0]).clamp(0.0, 1.0),
         "heatmap": torch.sigmoid(aux_maps[1]).clamp(0.0, 1.0),
         "paf": torch.tanh(aux_maps[2:4]).clamp(-1.0, 1.0),
     }
+    if aux_maps.shape[0] >= 5:
+        prediction["detail_boundary"] = torch.sigmoid(aux_maps[4]).clamp(0.0, 1.0)
+    return prediction
 
 
 def make_aux_panel(
@@ -199,6 +175,7 @@ def make_aux_panel(
     columns: int,
     panel_width: int,
     pad: int,
+    show_derived_detail: bool = False,
 ) -> Image.Image:
     input_image = image_tensor_to_pil(image)
     gt_segmentation = gt_segmentation.float().clamp(0.0, 1.0)
@@ -209,8 +186,6 @@ def make_aux_panel(
     pred_heatmap = prediction["heatmap"]
     pred_paf = prediction["paf"]
 
-    gt_edge = make_detail_edge_map(gt_segmentation)
-    pred_edge = make_detail_edge_map(pred_segmentation)
     gt_paf_magnitude = torch.linalg.vector_norm(gt_paf, dim=0).clamp(0.0, 1.0)
     pred_paf_magnitude = torch.linalg.vector_norm(pred_paf, dim=0).clamp(0.0, 1.0)
 
@@ -218,15 +193,32 @@ def make_aux_panel(
         add_label(input_image, "Input"),
         add_label(overlay_map(input_image, gt_segmentation, (40, 210, 80)), "GT segmentation overlay"),
         add_label(overlay_map(input_image, pred_segmentation, (240, 80, 40)), "Pred segmentation overlay"),
-        add_label(grayscale_to_pil(gt_edge), "GT detail edge"),
-        add_label(grayscale_to_pil(pred_edge), "Pred detail edge"),
-        add_label(heatmap_to_pil(gt_heatmap), "GT node heatmap"),
-        add_label(heatmap_to_pil(pred_heatmap), "Pred node heatmap"),
-        add_label(grayscale_to_pil(gt_paf_magnitude), "GT PAF magnitude"),
-        add_label(grayscale_to_pil(pred_paf_magnitude), "Pred PAF magnitude"),
-        add_label(paf_to_rgb(gt_paf), "GT PAF direction"),
-        add_label(paf_to_rgb(pred_paf), "Pred PAF direction"),
     ]
+    gt_detail = make_detail_edge_map(gt_segmentation)
+    if "detail_boundary" in prediction:
+        panels.extend(
+            [
+                add_label(grayscale_to_pil(gt_detail), "GT detail boundary target"),
+                add_label(grayscale_to_pil(prediction["detail_boundary"]), "Pred detail boundary head"),
+            ]
+        )
+    elif show_derived_detail:
+        panels.extend(
+            [
+                add_label(grayscale_to_pil(gt_detail), "GT derived boundary"),
+                add_label(grayscale_to_pil(make_detail_edge_map(pred_segmentation)), "Pred derived boundary"),
+            ]
+        )
+    panels.extend(
+        [
+            add_label(heatmap_to_pil(gt_heatmap), "GT node heatmap"),
+            add_label(heatmap_to_pil(pred_heatmap), "Pred node heatmap"),
+            add_label(grayscale_to_pil(gt_paf_magnitude), "GT PAF magnitude"),
+            add_label(grayscale_to_pil(pred_paf_magnitude), "Pred PAF magnitude"),
+            add_label(paf_to_rgb(gt_paf), "GT PAF direction"),
+            add_label(paf_to_rgb(pred_paf), "Pred PAF direction"),
+        ]
+    )
     return make_panel_grid(panels, columns=columns, pad=pad, panel_width=panel_width)
 
 
@@ -246,6 +238,9 @@ def write_aux_summary_json(path: Path, *, sample_id: str, prediction: Mapping[st
         "pred_paf_magnitude_mean": float(torch.linalg.vector_norm(pred_paf, dim=0).mean()),
         "gt_paf_magnitude_mean": float(torch.linalg.vector_norm(gt_paf, dim=0).mean()),
     }
+    if "detail_boundary" in prediction:
+        payload["pred_detail_boundary_mean"] = float(prediction["detail_boundary"].mean())
+        payload["gt_detail_boundary_mean"] = float(make_detail_edge_map(gt_seg).mean())
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
@@ -264,6 +259,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--columns", type=int, default=3, help="Grid columns")
     parser.add_argument("--panel-width", type=int, default=320, help="Rendered width of each panel cell")
     parser.add_argument("--pad", type=int, default=8, help="Whitespace between panel cells")
+    parser.add_argument(
+        "--show-derived-detail",
+        action="store_true",
+        help="Render segmentation-derived boundary maps even when the checkpoint has no detail head",
+    )
     parser.add_argument("--save-json", action="store_true", help="Save compact per-sample map statistics JSON")
     return parser
 
@@ -311,6 +311,7 @@ def main() -> None:
             columns=int(args.columns),
             panel_width=int(args.panel_width),
             pad=int(args.pad),
+            show_derived_detail=bool(args.show_derived_detail),
         )
         sample_name = Path(str(sample_id or label)).stem
         panel_path = output_dir / f"{sample_name}_aux_panel.png"

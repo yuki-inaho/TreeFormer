@@ -7,6 +7,8 @@ class Config:
     W_AUX_SEG = 2.0
     W_AUX_SEG_DICE = 1.5
     AUX_SEG_POS_WEIGHT = "auto"
+    W_AUX_DETAIL = 0.1
+    W_AUX_DETAIL_DICE = 0.5
     W_AUX_HEATMAP = 3.0
     W_AUX_PAF = 0.5
 
@@ -34,6 +36,9 @@ def test_build_aux_loss_weights_reads_legacy_train_config():
     assert weights.segmentation_bce == 1.0
     assert weights.segmentation_dice == 1.5
     assert weights.segmentation_pos_weight == "auto"
+    assert weights.detail == 0.1
+    assert weights.detail_dice == 0.5
+    assert weights.detail_scales == (1, 2, 4)
     assert weights.heatmap == 3.0
     assert weights.paf == 0.5
 
@@ -42,7 +47,18 @@ def test_compute_aux_losses_backpropagates_with_resized_maps():
     output = {"aux_maps": torch.randn(2, 4, 4, 5, requires_grad=True)}
     losses = compute_aux_losses(output, _targets(), AuxLossWeights())
 
-    assert set(losses) == {"total", "seg_total", "seg_bce", "seg_dice", "seg_focal", "heatmap_mse", "paf_l1"}
+    assert set(losses) == {
+        "total",
+        "seg_total",
+        "seg_bce",
+        "seg_dice",
+        "seg_focal",
+        "detail_total",
+        "detail_bce",
+        "detail_dice",
+        "heatmap_mse",
+        "paf_l1",
+    }
     assert losses["total"].ndim == 0
 
     losses["total"].backward()
@@ -61,6 +77,8 @@ def test_compute_aux_eval_metrics_reports_validation_signals():
     assert "seg_soft_dice_score" in metrics
     assert "seg_precision" in metrics
     assert "seg_recall" in metrics
+    assert "detail_iou" in metrics
+    assert "detail_soft_dice_score" in metrics
     assert "heatmap_mae" in metrics
     assert "paf_masked_l1" in metrics
     assert 0.0 <= metrics["seg_iou"].item() <= 1.0
@@ -86,6 +104,40 @@ def test_segmentation_only_weights_exclude_heatmap_and_paf_from_total():
     assert torch.allclose(losses["total"], expected)
     losses["total"].backward()
     assert aux_maps.grad is not None
+
+
+def test_detail_boundary_loss_is_optional_and_uses_fifth_channel():
+    targets = _targets(batch_size=1)
+    aux_maps = torch.randn(1, 5, 8, 10, requires_grad=True)
+    weights = AuxLossWeights(
+        segmentation=1.0,
+        segmentation_bce=1.0,
+        detail=0.1,
+        detail_bce=1.0,
+        detail_dice=1.0,
+        heatmap=0.0,
+        paf=0.0,
+    )
+
+    losses = compute_aux_losses({"aux_maps": aux_maps}, targets, weights)
+
+    expected = losses["seg_bce"] + 0.1 * (losses["detail_bce"] + losses["detail_dice"])
+    assert torch.allclose(losses["total"], expected)
+    assert losses["detail_total"].item() > 0.0
+    losses["total"].backward()
+    assert aux_maps.grad is not None
+
+
+def test_detail_boundary_loss_requires_fifth_channel_when_enabled():
+    targets = _targets(batch_size=1)
+    aux_maps = torch.randn(1, 4, 8, 10, requires_grad=True)
+
+    try:
+        compute_aux_losses({"aux_maps": aux_maps}, targets, AuxLossWeights(detail=0.1))
+    except ValueError as exc:
+        assert "OUT_CHANNELS>=5" in str(exc)
+    else:
+        raise AssertionError("expected detail loss to require a fifth aux channel")
 
 
 def test_segmentation_loss_rejects_unnormalized_mask_values():

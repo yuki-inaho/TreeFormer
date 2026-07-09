@@ -103,7 +103,7 @@ export TREEFORMER_AUX_PANEL_OUTPUT=${TREEFORMER_ASSETS_ROOT:-../TreeFormer_asset
 just infer-aux-panels
 ```
 
-`infer_aux_panel_treeformer.py` writes one `<sample_id>_aux_panel.png` per image. The panels include input, GT/pred segmentation overlays, STDC-style detail edge maps derived from segmentation masks, GT/pred node heatmaps, and GT/pred PAF magnitude/direction maps. The GT segmentation overlay should be read from the same external TPE mask contract as training. The detail edge map is a visualization target derived from segmentation by a multi-scale Laplacian-style boundary extractor; it is not a separate model output channel in the current 4-channel aux head.
+`infer_aux_panel_treeformer.py` writes one `<sample_id>_aux_panel.png` per image. The panels include input, GT/pred segmentation overlays, GT/pred node heatmaps, and GT/pred PAF magnitude/direction maps. The GT segmentation overlay should be read from the same external TPE mask contract as training. When a checkpoint has a fifth aux channel, panels also show `GT detail boundary target` and `Pred detail boundary head`; otherwise derived boundary maps stay hidden unless `--show-derived-detail` is passed explicitly.
 
 Operational notes:
 
@@ -112,9 +112,10 @@ Operational notes:
 - `DATA.SEGMENTATION_TARGET_SOURCE=external_mask` is expected for `train=seg_supervised` and `train=aux_supervised`. Missing `seg/<sample_id>.png` or legacy `unet/<sample_id>.png` is a configuration error, not a reason to fall back silently to graph-derived labels.
 - External mask images may be stored as `0/255` PNGs; the loader thresholds them to binary float targets before BCE / Dice / Focal loss, and the loss code rejects targets outside `[0, 1]`.
 - The default segmentation loss uses binary BCE + Dice with Focal disabled. `AUX_SEG_POS_WEIGHT=auto` is capped conservatively so rare foreground does not cause broad positive overprediction.
+- `train=seg_supervised` adds a weak optional STDC-style detail boundary auxiliary head as the fifth aux channel. Its target is a multi-scale Laplacian boundary map derived from the external segmentation mask, not a graph edge or PAF. `W_AUX_DETAIL=0.1` keeps it as a light boundary-sharpening regularizer while BCE + Dice segmentation remains the primary objective.
 - Aux/seg stages may keep EMA updates enabled, but use `ema.evaluate=false` for validation and best-checkpoint selection because the aux head is newly initialized and `decay=0.9999` changes too slowly during short stages.
 - RGB input is normalized by the legacy loader with `Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])`, so model input is scaled from `[0, 1]` to `[-1, 1]`.
-- In `train=seg_supervised`, `W_AUX_HEATMAP=0` and `W_AUX_PAF=0`; heatmap and PAF channels are not trained in that stage.
+- In `train=seg_supervised`, `W_AUX_HEATMAP=0` and `W_AUX_PAF=0`; heatmap and PAF channels are not trained in that stage. The aux output layout is segmentation, heatmap, PAF-x, PAF-y, optional detail boundary. `train=aux_supervised` keeps the original 4-channel layout and has `W_AUX_DETAIL=0`.
 - Keep `DATA.BATCH_SIZE=12` and `DATA.MAX_SIZE=128` unless the GPU is shared or memory pressure is observed.
 - Monitor `val/seg_soft_dice_score`, `val/seg_dice_score`, `val/seg_iou`, `val/seg_precision`, `val/seg_recall`, and `val/pred_positive_rate`; do not interpret `val/smd` for this mode because graph validation is intentionally skipped. `val/seg_dice_score` and IoU are hard-threshold metrics at `AUX_SEG_THRESHOLD`; early runs may show zero while soft Dice and loss still improve.
 
@@ -225,7 +226,7 @@ PYTHONPATH=. "$TREEFORMER_PYTHON" infer_aux_panel_treeformer.py \
   --save-json
 ```
 
-The optional JSON summary stores compact scalar statistics only. Generated panels and summaries must stay under `${TREEFORMER_ASSETS_ROOT}` or another repo-external artifact directory.
+The optional JSON summary stores compact scalar statistics only. Generated panels and summaries must stay under `${TREEFORMER_ASSETS_ROOT}` or another repo-external artifact directory. Detail boundary panels are model-output panels only when the checkpoint has a fifth aux channel; use `--show-derived-detail` only for debugging segmentation-derived boundaries.
 
 ## Optimizers
 
