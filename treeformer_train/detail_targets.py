@@ -46,7 +46,11 @@ def make_stdc_detail_boundary_target(
     height, width = mask.shape[-2:]
     edges = []
     for scale in tuple(int(scale) for scale in scales):
-        scaled = mask if scale <= 1 else F.interpolate(mask, scale_factor=1.0 / float(scale), mode="bilinear", align_corners=False)
+        scaled = (
+            mask
+            if scale <= 1
+            else F.interpolate(mask, scale_factor=1.0 / float(scale), mode="bilinear", align_corners=False)
+        )
         edge = F.conv2d(scaled, kernel, padding=1).abs()
         edge = (edge > threshold).to(dtype=mask.dtype)
         if edge.shape[-2:] != (height, width):
@@ -55,6 +59,8 @@ def make_stdc_detail_boundary_target(
 
     combined = torch.stack(edges, dim=0).amax(dim=0)
     if support_kernel_size > 1:
-        fine_support = F.max_pool2d(edges[0], kernel_size=support_kernel_size, stride=1, padding=support_kernel_size // 2)
+        fine_support = F.max_pool2d(
+            edges[0], kernel_size=support_kernel_size, stride=1, padding=support_kernel_size // 2
+        )
         combined = combined * fine_support
     return combined.clamp(0.0, 1.0)

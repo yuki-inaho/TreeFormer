@@ -3,13 +3,16 @@
 import torch
 import torch.distributed as dist
 
+
 def get_total_grad_norm(parameters, norm_type=2):
     parameters = list(filter(lambda p: p.grad is not None, parameters))
     norm_type = float(norm_type)
     device = parameters[0].grad.device
-    total_norm = torch.norm(torch.stack([torch.norm(p.grad.detach(), norm_type).to(device) for p in parameters]),
-                            norm_type)
+    total_norm = torch.norm(
+        torch.stack([torch.norm(p.grad.detach(), norm_type).to(device) for p in parameters]), norm_type
+    )
     return total_norm
+
 
 def nested_tensor_from_tensor_list(tensor_list):
     if isinstance(tensor_list, NestedTensor):
@@ -36,10 +39,11 @@ def nested_tensor_from_tensor_list(tensor_list):
         mask = torch.ones((b, h, w), dtype=torch.bool, device=device)
         for img, pad_img, m in zip(tensor_list, tensor, mask):
             pad_img[: img.shape[0], : img.shape[1], : img.shape[2]].copy_(img)
-            m[: img.shape[1], :img.shape[2]] = False
+            m[: img.shape[1], : img.shape[2]] = False
     else:
-        raise ValueError('not supported')
+        raise ValueError("not supported")
     return NestedTensor(tensor, mask)
+
 
 def _max_by_axis(the_list):
     maxes = the_list[0]
@@ -47,6 +51,7 @@ def _max_by_axis(the_list):
         for index, item in enumerate(sublist):
             maxes[index] = max(maxes[index], item)
     return maxes
+
 
 class NestedTensor(object):
     def __init__(self, tensors, mask):
@@ -78,10 +83,12 @@ class NestedTensor(object):
 def is_main_process():
     return get_rank() == 0
 
+
 def get_rank():
     if not is_dist_avail_and_initialized():
         return 0
     return dist.get_rank()
+
 
 def is_dist_avail_and_initialized():
     if not dist.is_available():
@@ -90,8 +97,9 @@ def is_dist_avail_and_initialized():
         return False
     return True
 
+
 def inverse_sigmoid(x, eps=1e-5):
     x = x.clamp(min=0, max=1)
     x1 = x.clamp(min=eps)
     x2 = (1 - x).clamp(min=eps)
-    return torch.log(x1/x2)
+    return torch.log(x1 / x2)

@@ -41,7 +41,9 @@ def _select_device(cfg: DictConfig, local_rank: int) -> torch.device:
     if requested == "cuda":
         if not torch.cuda.is_available():
             if bool(cfg.runtime.fail_if_cuda_unavailable):
-                raise RuntimeError("runtime.device=cuda was requested, but CUDA is unavailable. Set runtime.device=cpu explicitly for CPU-only checks.")
+                raise RuntimeError(
+                    "runtime.device=cuda was requested, but CUDA is unavailable. Set runtime.device=cpu explicitly for CPU-only checks."
+                )
             raise RuntimeError("CUDA unavailable and implicit CPU fallback is disabled by project policy")
         torch.cuda.set_device(local_rank)
         return torch.device("cuda", local_rank)
@@ -277,7 +279,12 @@ def main(cfg: DictConfig) -> None:
         )
 
     if aux_supervised_training:
-        from treeformer_train.aux_training import build_aux_loss_computer, build_aux_loss_weights, epoch_train_aux, epoch_val_aux
+        from treeformer_train.aux_training import (
+            build_aux_loss_computer,
+            build_aux_loss_weights,
+            epoch_train_aux,
+            epoch_val_aux,
+        )
 
         aux_loss_weights = build_aux_loss_weights(legacy_config.TRAIN)
         aux_loss_computer = build_aux_loss_computer(
@@ -326,7 +333,9 @@ def main(cfg: DictConfig) -> None:
     max_epochs = int(legacy_config.TRAIN.EPOCHS)
     if max_epochs <= 0:
         if distributed_context.is_rank_zero:
-            print("Hydra dry-run completed: dataset, dataloader, model, optimizer, scheduler, EMA and checkpoint manager initialized.")
+            print(
+                "Hydra dry-run completed: dataset, dataloader, model, optimizer, scheduler, EMA and checkpoint manager initialized."
+            )
         writer.close()
         barrier(distributed_context)
         return
@@ -386,9 +395,13 @@ def main(cfg: DictConfig) -> None:
         else:
             if ema is not None and bool(cfg.ema.evaluate):
                 with ema.average_parameters(model):
-                    val_smd = epoch_val(val_loader=val_loader, net=model, config=legacy_config, device=device, SMD=smd, args=args)
+                    val_smd = epoch_val(
+                        val_loader=val_loader, net=model, config=legacy_config, device=device, SMD=smd, args=args
+                    )
             else:
-                val_smd = epoch_val(val_loader=val_loader, net=model, config=legacy_config, device=device, SMD=smd, args=args)
+                val_smd = epoch_val(
+                    val_loader=val_loader, net=model, config=legacy_config, device=device, SMD=smd, args=args
+                )
 
         epoch_seconds = time.time() - epoch_start
         lr = float(optimizer_bundle.optimizer.param_groups[0]["lr"])
@@ -441,7 +454,9 @@ def main(cfg: DictConfig) -> None:
                     f"| val_detail_iou={val_metrics['detail_iou']:.6f}{best_summary}"
                 )
             else:
-                print(f"Epoch {epoch}/{max_epochs} | train_total={train_total:.6f} | val_smd={val_smd:.8f}{best_summary}")
+                print(
+                    f"Epoch {epoch}/{max_epochs} | train_total={train_total:.6f} | val_smd={val_smd:.8f}{best_summary}"
+                )
         optimizer_bundle.scheduler.step()
         barrier(distributed_context)
 

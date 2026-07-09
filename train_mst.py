@@ -1,9 +1,11 @@
 import os
 import random
 import yaml
+
 # import sys
 import json
 import copy
+
 # from argparse import ArgumentParser
 from math import atan2, degrees
 
@@ -21,6 +23,7 @@ from skimage import exposure
 import networkx as nx
 import cv2
 from treeformer_train.virtual_root import load_forest_metadata
+
 
 def find_segments_v2(start_node, node_collections, branching_nodes, end_nodes):
     segments = []
@@ -53,11 +56,14 @@ def find_segments_v2(start_node, node_collections, branching_nodes, end_nodes):
     dfs(start_node, [])
 
     return segments
+
+
 def calculate_angle(point1, point2):
     delta_x = point2[0] - point1[0]
     delta_y = point2[1] - point1[1]
     angle = atan2(delta_y, delta_x)
     return degrees(angle) % 360
+
 
 def sort_segments_v3(segments, points, branching_nodes):
     sorted_segments = []
@@ -69,7 +75,9 @@ def sort_segments_v3(segments, points, branching_nodes):
             continue
 
         if start_node in branching_nodes:
-            related_segments = [seg for seg in segments if seg[0] == start_node and tuple(seg) not in processed_segments]
+            related_segments = [
+                seg for seg in segments if seg[0] == start_node and tuple(seg) not in processed_segments
+            ]
 
             prev_segment = [seg for seg in sorted_segments if seg[-1] == start_node]
             if prev_segment:
@@ -78,8 +86,11 @@ def sort_segments_v3(segments, points, branching_nodes):
                 prev_direction = None
 
             related_segments.sort(
-                key=lambda x: abs(calculate_angle(points[start_node], points[x[1]]) - prev_direction)
-                if prev_direction is not None else 0
+                key=lambda x: (
+                    abs(calculate_angle(points[start_node], points[x[1]]) - prev_direction)
+                    if prev_direction is not None
+                    else 0
+                )
             )
 
             sorted_segments.extend(related_segments)
@@ -89,6 +100,8 @@ def sort_segments_v3(segments, points, branching_nodes):
             processed_segments.add(tuple(segment))
 
     return sorted_segments
+
+
 ########################################################################################################################
 def generate_PAFs(height, width, points, paths, line_thickness=2):
     PAFs = np.zeros((height, width, 2), dtype=np.float32)
@@ -110,10 +123,12 @@ def generate_PAFs(height, width, points, paths, line_thickness=2):
                 x = int(x1 + t * (x2 - x1))
                 y = int(y1 + t * (y2 - y1))
                 if 0 <= x < width and 0 <= y < height:
-                    PAFs[y - line_thickness:y + line_thickness, x - line_thickness:x + line_thickness, 0] = ux
-                    PAFs[y - line_thickness:y + line_thickness, x - line_thickness:x + line_thickness, 1] = uy
+                    PAFs[y - line_thickness : y + line_thickness, x - line_thickness : x + line_thickness, 0] = ux
+                    PAFs[y - line_thickness : y + line_thickness, x - line_thickness : x + line_thickness, 1] = uy
 
     return PAFs
+
+
 def create_mask_with_polylines(image_shape, keypoints, segments, thickness=2):
     kpts = copy.deepcopy(keypoints)
     # Scale keypoints to match the image dimensions
@@ -124,6 +139,93 @@ def create_mask_with_polylines(image_shape, keypoints, segments, thickness=2):
         segment_points = kpts[segment].reshape((-1, 1, 2)).astype(np.int32)
         cv2.polylines(mask, [segment_points], isClosed=False, color=1, thickness=thickness)
     return mask
+
+
+def _edge_pairs_from_node_collections(node_collections):
+    pairs = []
+    for collection in node_collections:
+        for idx in range(len(collection) - 1):
+            start = int(collection[idx])
+            end = int(collection[idx + 1])
+            if start != end:
+                pairs.append([start, end])
+    return pairs
+
+
+def _select_component_root(component_nodes, component_position, unique_components, root_node_indices=None):
+    nodes = sorted(int(node) for node in component_nodes)
+    if not nodes:
+        return None
+    if root_node_indices is None:
+        return nodes[0]
+
+    roots = torch.as_tensor(root_node_indices, dtype=torch.long).reshape(-1).tolist()
+    if len(roots) == len(unique_components):
+        candidate = int(roots[component_position])
+        if candidate in nodes:
+            return candidate
+    for candidate in roots:
+        if int(candidate) in nodes:
+            return int(candidate)
+    return nodes[0]
+
+
+def build_forest_paf_segments(node_count, node_collections, component_id=None, root_node_indices=None):
+    edge_pairs = _edge_pairs_from_node_collections(node_collections)
+    if node_count <= 0:
+        return []
+
+    if component_id is None:
+        graph = nx.Graph()
+        graph.add_nodes_from(range(node_count))
+        graph.add_edges_from(edge_pairs)
+        unique_components = list(range(nx.number_connected_components(graph)))
+        component_specs = [
+            (
+                component_position,
+                sorted(component_nodes),
+                [pair for pair in edge_pairs if pair[0] in component_nodes and pair[1] in component_nodes],
+            )
+            for component_position, component_nodes in enumerate(nx.connected_components(graph))
+        ]
+    else:
+        component_tensor = torch.as_tensor(component_id, dtype=torch.long).reshape(-1)
+        if int(component_tensor.numel()) != int(node_count):
+            raise ValueError(f"component_id length must match node count: {component_tensor.numel()} != {node_count}")
+        unique_components = sorted(int(component) for component in torch.unique(component_tensor).tolist())
+        component_specs = []
+        for component_position, component in enumerate(unique_components):
+            component_nodes = torch.nonzero(component_tensor == int(component)).reshape(-1).tolist()
+            component_node_set = {int(node) for node in component_nodes}
+            component_edges = [
+                pair
+                for pair in edge_pairs
+                if pair[0] in component_node_set
+                and pair[1] in component_node_set
+                and int(component_tensor[pair[0]]) == int(component_tensor[pair[1]])
+            ]
+            component_specs.append((component_position, sorted(component_node_set), component_edges))
+
+    all_segments = []
+    for component_position, component_nodes, component_edges in component_specs:
+        if not component_edges:
+            continue
+        graph = nx.Graph()
+        graph.add_nodes_from(component_nodes)
+        graph.add_edges_from(component_edges)
+        branching_nodes = [node for node, degree in graph.degree() if degree > 2]
+        start_node = _select_component_root(
+            component_nodes,
+            component_position,
+            unique_components,
+            root_node_indices=root_node_indices,
+        )
+        end_nodes = [node for node, degree in graph.degree() if degree == 1 and node != start_node]
+        segments = find_segments_v2(start_node, component_edges, branching_nodes, end_nodes)
+        all_segments.extend(segments)
+    return all_segments
+
+
 ##############################################################
 def generate_heatmap(normalized_kpts, image_size, sigma):
     H, W = image_size
@@ -133,10 +235,12 @@ def generate_heatmap(normalized_kpts, image_size, sigma):
         x = x_normalized * W
         y = y_normalized * H
         xx, yy = np.meshgrid(np.arange(W), np.arange(H))
-        gaussian = np.exp(-0.5 * ((xx - x) ** 2 + (yy - y) ** 2) / sigma ** 2)
+        gaussian = np.exp(-0.5 * ((xx - x) ** 2 + (yy - y) ** 2) / sigma**2)
         gaussian[gaussian < 0.01] = 0
         heatmap = np.maximum(heatmap, gaussian)
     return heatmap
+
+
 ########################################################################################################################
 def _datapoint_field(datapoint, name):
     if isinstance(datapoint, dict):
@@ -156,8 +260,10 @@ def load_detr_dataset(tgt_data_path, *, strict_virtual_root_metadata=False):
     ids = path_list
 
     for id in ids:
-        datapoint = torch.load(tgt_data_path + '/' + id, weights_only=False)
-        DETR_points_left_up = torch.as_tensor(_datapoint_field(datapoint, "list_DETR_points_left_up"), dtype=torch.float32)
+        datapoint = torch.load(tgt_data_path + "/" + id, weights_only=False)
+        DETR_points_left_up = torch.as_tensor(
+            _datapoint_field(datapoint, "list_DETR_points_left_up"), dtype=torch.float32
+        )
         DETR_node_collections = torch.as_tensor(_datapoint_field(datapoint, "DETR_node_collections"), dtype=torch.long)
         forest_metadata = load_forest_metadata(
             datapoint,
@@ -171,12 +277,21 @@ def load_detr_dataset(tgt_data_path, *, strict_virtual_root_metadata=False):
         list_forest_metadata.append(forest_metadata)
     return ids, (list_DETR_points_left_up, list_DETR_node_collections, list_forest_metadata)
 
+
 #########################################################################################################
 class LoadCNNDataset(Dataset):
-    def __init__(self, parent_path, max_size=1000,
-                 max_change_light_rate=0.3, is_train=True, is_rotate=False, sample_transform=None,
-                 segmentation_target_source="auto", return_forest_metadata=False,
-                 strict_virtual_root_metadata=False):
+    def __init__(
+        self,
+        parent_path,
+        max_size=1000,
+        max_change_light_rate=0.3,
+        is_train=True,
+        is_rotate=False,
+        sample_transform=None,
+        segmentation_target_source="auto",
+        return_forest_metadata=False,
+        strict_virtual_root_metadata=False,
+    ):
         self.parent_path = parent_path
         self.tgt_data_path = os.path.join(parent_path, "data")
         self.img_path = os.path.join(parent_path, "img")
@@ -213,7 +328,6 @@ class LoadCNNDataset(Dataset):
         if self.segmentation_target_source == "external_mask" and self.is_rotate:
             raise ValueError("external segmentation masks cannot be used with legacy rotation enabled")
 
-
     @property
     def processed_file_names(self):
         path_list = []
@@ -246,12 +360,12 @@ class LoadCNNDataset(Dataset):
 
     # 加噪声
     def _addNoise(self, img):
-        '''
+        """
         输入:
             img:图像array
         输出:
             加噪声后的图像array,由于输出的像素是在[0,1]之间,所以得乘以255
-        '''
+        """
         # random.seed(int(time.time()))
         noise_img = copy.deepcopy(img)
         # return random_noise(noise_img, mode='gaussian', seed=int(time.time()), clip=True) * 255
@@ -296,12 +410,23 @@ class LoadCNNDataset(Dataset):
     # 调整亮度
     def _changeLight(self, img):
         # random.seed(int(time.time()))
-        flag = random.uniform(1 - self.max_change_light_rate, 1 + self.max_change_light_rate)  # flag>1为调暗,小于1为调亮
+        flag = random.uniform(
+            1 - self.max_change_light_rate, 1 + self.max_change_light_rate
+        )  # flag>1为调暗,小于1为调亮
         light_img = copy.deepcopy(img)
         return exposure.adjust_gamma(light_img, flag)
 
-    def generate_PAFs_by_idx(self, list_DETR_points_left_up_idx, list_DETR_node_collections_idx, feature_size,
-                      sigma=3, unet_thickness=2, mask_thickness=6):
+    def generate_PAFs_by_idx(
+        self,
+        list_DETR_points_left_up_idx,
+        list_DETR_node_collections_idx,
+        feature_size,
+        sigma=3,
+        unet_thickness=2,
+        mask_thickness=6,
+        component_id=None,
+        root_node_indices=None,
+    ):
         DETR_points_left_up = list_DETR_points_left_up_idx.tolist()
         DETR_node_collections = list_DETR_node_collections_idx.tolist()
         kpts = list_DETR_points_left_up_idx.numpy()
@@ -309,19 +434,16 @@ class LoadCNNDataset(Dataset):
         height, width = feature_size[0], feature_size[1]
         orig_size = (height, width)  # 示例原始图像大小
         sigma = sigma  # 高斯的标准偏差
-        start_node = 0
-
-        # 构建Graph
+        segments = build_forest_paf_segments(
+            node_count=len(DETR_points_left_up),
+            node_collections=DETR_node_collections,
+            component_id=component_id,
+            root_node_indices=root_node_indices,
+        )
         G = nx.Graph()
-        for collection in DETR_node_collections:
-            for i in range(len(collection) - 1):
-                G.add_edge(collection[i], collection[i + 1])
-        # 找到分歧点，即度数大于2的点
+        G.add_nodes_from(range(len(DETR_points_left_up)))
+        G.add_edges_from(_edge_pairs_from_node_collections(DETR_node_collections))
         branching_nodes = [node for node, degree in G.degree() if degree > 2]
-
-        # 找到终点，即度数为1的点，但不包括起点
-        end_nodes = [node for node, degree in G.degree() if degree == 1 and node != start_node]
-        segments = find_segments_v2(start_node, DETR_node_collections, branching_nodes, end_nodes)
         sorted_segments_v3 = sort_segments_v3(segments, DETR_points_left_up, branching_nodes)
         PAFs = generate_PAFs(height, width, DETR_points_left_up, sorted_segments_v3)
         # PAFs = torch.tensor(PAFs, device=self.device)
@@ -379,7 +501,9 @@ class LoadCNNDataset(Dataset):
 
     @staticmethod
     def _resize_binary_mask(mask, output_hw):
-        resized = cv2.resize(mask.astype(np.float32), (int(output_hw[1]), int(output_hw[0])), interpolation=cv2.INTER_NEAREST)
+        resized = cv2.resize(
+            mask.astype(np.float32), (int(output_hw[1]), int(output_hw[0])), interpolation=cv2.INTER_NEAREST
+        )
         return torch.tensor((resized > 0.5).astype(np.float32))
 
     def _augment_one_sample(self, check_img, nodes_list):
@@ -424,17 +548,13 @@ class LoadCNNDataset(Dataset):
         def find_node_by_point(graph, point):
             # 遍历图中的所有节点，找到与给定点匹配的节点
             for node, data in graph.nodes(data=True):
-                if data['point'] == point:
+                if data["point"] == point:
                     return node
             return None  # 如果没有找到匹配的节点，返回None
+
         old_img = copy.deepcopy(img).cpu().numpy()
         C, height, width = old_img.shape
-        edge_func = {
-            'top': [0, 1, 0],
-            'bottom': [0, 1, -height],
-            'left': [1, 0, 0],
-            'right': [1, 0, -width]
-        }
+        edge_func = {"top": [0, 1, 0], "bottom": [0, 1, -height], "left": [1, 0, 0], "right": [1, 0, -width]}
         # 转换维度从 (channels, height, width) 到 (height, width, channels)
 
         check_nodes_list = list()
@@ -461,8 +581,8 @@ class LoadCNNDataset(Dataset):
             if start in rotate_G.nodes and end in rotate_G.nodes:
                 rotate_G.add_edge(start, end)
 
-        check_nodes_data = [check_G.nodes[node]['point'] for node in check_G.nodes]
-        rotate_nodes_data = [rotate_G.nodes[node]['point'] for node in rotate_G.nodes]
+        check_nodes_data = [check_G.nodes[node]["point"] for node in check_G.nodes]
+        rotate_nodes_data = [rotate_G.nodes[node]["point"] for node in rotate_G.nodes]
 
         # 将列表转换为numpy数组以方便计算
         check_nodes_array = np.array(check_nodes_data)
@@ -490,33 +610,33 @@ class LoadCNNDataset(Dataset):
             start, end = connection
             if start in check_G.nodes and end in check_G.nodes:
                 check_G.add_edge(start, end)
-        check_nodes_data = [check_G.nodes[node]['point'] for node in check_G.nodes]
+        check_nodes_data = [check_G.nodes[node]["point"] for node in check_G.nodes]
         rotate_start_node = 0
         rotate_end_nodes = [node for node, degree in rotate_G.degree() if degree == 1 and node != rotate_start_node]
         # 示例：获取rotate_end_nodes中每个节点在check_G中对应节点的子节点
         for rotate_end_node in rotate_end_nodes:
             # 获取rotate_end_node的坐标
-            rotate_end_point = rotate_G.nodes[rotate_end_node]['point']
+            rotate_end_point = rotate_G.nodes[rotate_end_node]["point"]
             # 在check_G中找到匹配的节点
             check_node = find_node_by_point(check_G, rotate_end_point)
             if check_node is not None:
                 # 如果找到了匹配的节点，获取其子节点
                 check_children = get_children(check_G, check_node)
                 if len(check_children) == 1:
-                    check_children_point_x, check_children_point_y = check_G.nodes[check_children[0]]['point']
+                    check_children_point_x, check_children_point_y = check_G.nodes[check_children[0]]["point"]
                     # 首先，计算点到四条边的距离
                     distance_to_edges = {
-                        'top': abs(check_children_point_y),
-                        'bottom': abs(height - check_children_point_y),
-                        'left': abs(check_children_point_x),
-                        'right': abs(width - check_children_point_x)
+                        "top": abs(check_children_point_y),
+                        "bottom": abs(height - check_children_point_y),
+                        "left": abs(check_children_point_x),
+                        "right": abs(width - check_children_point_x),
                     }
                     # 然后，使用 min 函数找到最短的距离及其对应的边
                     closest_edge_key, shortest_distance = min(distance_to_edges.items(), key=lambda item: item[1])
                     # 如果你需要获取最近边的方程系数，你可以从 edge_func 字典中获取
                     closest_edge_func = edge_func[closest_edge_key]
                     # 线段的两个端点的坐标
-                    x1, y1 = check_G.nodes[check_children[0]]['point']
+                    x1, y1 = check_G.nodes[check_children[0]]["point"]
                     x2, y2 = rotate_end_point
 
                     # 最近边的方程系数
@@ -526,7 +646,7 @@ class LoadCNNDataset(Dataset):
                     # 如果分母为零，说明线段平行于最近的边，因此我们不需要做任何事情
                     if denominator != 0:
                         # 解方程以获取 t 的值
-                        t = - (A * x1 + B * y1 + C) / denominator
+                        t = -(A * x1 + B * y1 + C) / denominator
 
                         # 使用 t 的值计算交点的坐标
                         intersection_x = x1 + t * (x2 - x1)
@@ -539,16 +659,19 @@ class LoadCNNDataset(Dataset):
                         new_child_point = [int(clamped_intersection_x), int(clamped_intersection_y)]
 
                         # 计算 new_child_point 和 rotate_end_point 之间的欧几里得距离
-                        distance = ((new_child_point[0] - rotate_end_point[0]) ** 2 + (
-                                    new_child_point[1] - rotate_end_point[1]) ** 2) ** 0.5
+                        distance = (
+                            (new_child_point[0] - rotate_end_point[0]) ** 2
+                            + (new_child_point[1] - rotate_end_point[1]) ** 2
+                        ) ** 0.5
 
                         if new_child_point not in check_nodes_data and 3 < distance < 16:
                             rotate_G.add_node(len(rotate_G.nodes), point=new_child_point)
                             rotate_G.add_edge(rotate_end_node, len(rotate_G.nodes) - 1)
 
-        rotate_nodes_data = [rotate_G.nodes[node]['point'] for node in rotate_G.nodes]
-        final_rotate_nodes_tensor = torch.tensor(rotate_nodes_data, dtype=torch.float32, device=nodes_tensor.device) / torch.tensor(
-            [width, height], dtype=torch.float32, device=nodes_tensor.device)
+        rotate_nodes_data = [rotate_G.nodes[node]["point"] for node in rotate_G.nodes]
+        final_rotate_nodes_tensor = torch.tensor(
+            rotate_nodes_data, dtype=torch.float32, device=nodes_tensor.device
+        ) / torch.tensor([width, height], dtype=torch.float32, device=nodes_tensor.device)
         # 创建一个旧索引到新索引的映射
         index_mapping = {old_index: new_index for new_index, old_index in enumerate(rotate_G.nodes)}
         # 更新边的索引
@@ -557,6 +680,7 @@ class LoadCNNDataset(Dataset):
         final_rotate_connect_tensor = torch.tensor(updated_edges, dtype=torch.long, device=connect_tensor.device)
 
         return final_rotate_nodes_tensor, final_rotate_connect_tensor
+
     def _rotate(self, img, nodes_tensor, connect_tensor):
         rotate_nodes_tensor = copy.deepcopy(nodes_tensor)
         rotate_img = copy.deepcopy(img).cpu().numpy()
@@ -574,7 +698,9 @@ class LoadCNNDataset(Dataset):
         # int_nodes_list = [(p[0] * width, [1] * height) for p in nodes[0].cpu().numpy()]
         # print(nodes[0].cpu().numpy())
 
-        for x, y in (rotate_nodes_tensor * torch.tensor([width, height], device=rotate_nodes_tensor.device)).cpu().numpy():
+        for x, y in (
+            (rotate_nodes_tensor * torch.tensor([width, height], device=rotate_nodes_tensor.device)).cpu().numpy()
+        ):
             x1 = M[0][0] * x + M[0][1] * y + M[0][2]
             y1 = M[1][0] * x + M[1][1] * y + M[1][2]
             rotate_new_nodes_list.append([int(x1), int(y1)])
@@ -596,10 +722,11 @@ class LoadCNNDataset(Dataset):
                 if index_id in G.nodes:
                     G.remove_node(index_id)
 
-        nodes_data = [G.nodes[node]['point'] for node in G.nodes]
+        nodes_data = [G.nodes[node]["point"] for node in G.nodes]
 
         final_nodes_tensor = torch.tensor(nodes_data, dtype=torch.float32, device=nodes_tensor.device) / torch.tensor(
-            [width, height], dtype=torch.float32, device=nodes_tensor.device)
+            [width, height], dtype=torch.float32, device=nodes_tensor.device
+        )
         # 创建一个旧索引到新索引的映射
         index_mapping = {old_index: new_index for new_index, old_index in enumerate(G.nodes)}
         # 更新边的索引
@@ -610,9 +737,9 @@ class LoadCNNDataset(Dataset):
         img2 = np.transpose(img2, (2, 0, 1))
         img2_tensor = torch.tensor(img2, dtype=torch.float32, device=nodes_tensor.device)
 
-        final_nodes_tensor, final_connect_tensor = self._add_edge_branch(img, nodes_tensor, connect_tensor,
-                                                                         final_nodes_tensor,
-                                                                         final_connect_tensor, M)
+        final_nodes_tensor, final_connect_tensor = self._add_edge_branch(
+            img, nodes_tensor, connect_tensor, final_nodes_tensor, final_connect_tensor, M
+        )
         return img2_tensor, final_nodes_tensor, final_connect_tensor, M
 
     def _rotate_tensor(self, tensor0, M, dsize):
@@ -689,10 +816,10 @@ class LoadCNNDataset(Dataset):
 
         if len(feature_img.shape) == 3 and feature_img.shape[2] == 3:
             transform_feature = transforms.Compose(
-                [transforms.ToTensor(), transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])])
+                [transforms.ToTensor(), transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])]
+            )
         else:
-            transform_feature = transforms.Compose(
-                [transforms.ToTensor(), transforms.Normalize(mean=[0.5], std=[0.5])])
+            transform_feature = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean=[0.5], std=[0.5])])
 
         feature_img = transform_feature(feature_img)
         C, height, width = feature_img.shape
@@ -723,9 +850,9 @@ class LoadCNNDataset(Dataset):
             old_save_img = copy.deepcopy(feature_img)
             old_save_list_DETR_points_left_up = copy.deepcopy(list_DETR_points_left_up)
             old_save_list_DETR_node_collections_idx = copy.deepcopy(list_DETR_node_collections_idx)
-            feature_img, list_DETR_points_left_up, list_DETR_node_collections_idx, M = self._rotate(feature_img,
-                                                                                                    list_DETR_points_left_up,
-                                                                                                    list_DETR_node_collections_idx)
+            feature_img, list_DETR_points_left_up, list_DETR_node_collections_idx, M = self._rotate(
+                feature_img, list_DETR_points_left_up, list_DETR_node_collections_idx
+            )
             G_tree = nx.Graph()
             G_tree.add_nodes_from(range(len(list_DETR_points_left_up)))
             G_tree.add_edges_from(list_DETR_node_collections_idx.tolist())
@@ -740,7 +867,11 @@ class LoadCNNDataset(Dataset):
                     list_DETR_node_collections_idx=list_DETR_node_collections_idx,
                     list_DETR_points_left_up_idx=list_DETR_points_left_up,
                     feature_size=feature_size,
-                    sigma=3, unet_thickness=3, mask_thickness=6
+                    sigma=3,
+                    unet_thickness=3,
+                    mask_thickness=6,
+                    component_id=forest_metadata_idx.get("component_id"),
+                    root_node_indices=forest_metadata_idx.get("root_node_indices"),
                 )
             else:
                 # 按需生成 PAFs, mask, unet, heatmap
@@ -750,7 +881,11 @@ class LoadCNNDataset(Dataset):
                     list_DETR_node_collections_idx=list_DETR_node_collections_idx,
                     list_DETR_points_left_up_idx=list_DETR_points_left_up,
                     feature_size=feature_size,
-                    sigma=3, unet_thickness=3, mask_thickness=6
+                    sigma=3,
+                    unet_thickness=3,
+                    mask_thickness=6,
+                    component_id=forest_metadata_idx.get("component_id"),
+                    root_node_indices=forest_metadata_idx.get("root_node_indices"),
                 )
                 dsize = (feature_size[1], feature_size[0])
                 PAFs_idx = self._rotate_tensor(PAFs_idx, M, dsize)
@@ -764,29 +899,58 @@ class LoadCNNDataset(Dataset):
                 list_DETR_node_collections_idx=list_DETR_node_collections_idx,
                 list_DETR_points_left_up_idx=list_DETR_points_left_up,
                 feature_size=feature_size,
-                sigma=3, unet_thickness=3, mask_thickness=6
+                sigma=3,
+                unet_thickness=3,
+                mask_thickness=6,
+                component_id=forest_metadata_idx.get("component_id"),
+                root_node_indices=forest_metadata_idx.get("root_node_indices"),
             )
 
         if external_unet_idx is not None:
             unet_idx = external_unet_idx
 
-        item = (feature_img.contiguous(), label_img_name0,
-                list_DETR_points_left_up, list_DETR_node_collections_idx,
-                PAFs_idx, mask_idx, unet_idx, heatmap_idx)
+        item = (
+            feature_img.contiguous(),
+            label_img_name0,
+            list_DETR_points_left_up,
+            list_DETR_node_collections_idx,
+            PAFs_idx,
+            mask_idx,
+            unet_idx,
+            heatmap_idx,
+        )
         if self.return_forest_metadata:
             return item + (forest_metadata_idx, self.ids1[idx])
         return item + (self.ids1[idx],)
 
+
 ########################################################################################################################
 def custom_collate_fn(batch):
     if len(batch[0]) == 10:
-        (feature_img, label_img_name0, list_DETR_points_left_up, list_DETR_node_collections,
-         list_PAFs, list_mask, list_unet, list_heatmap, list_forest_metadata,
-         ids1) = zip(*batch)
+        (
+            feature_img,
+            label_img_name0,
+            list_DETR_points_left_up,
+            list_DETR_node_collections,
+            list_PAFs,
+            list_mask,
+            list_unet,
+            list_heatmap,
+            list_forest_metadata,
+            ids1,
+        ) = zip(*batch)
     elif len(batch[0]) == 9:
-        (feature_img, label_img_name0, list_DETR_points_left_up, list_DETR_node_collections,
-         list_PAFs, list_mask, list_unet, list_heatmap,
-         ids1) = zip(*batch)
+        (
+            feature_img,
+            label_img_name0,
+            list_DETR_points_left_up,
+            list_DETR_node_collections,
+            list_PAFs,
+            list_mask,
+            list_unet,
+            list_heatmap,
+            ids1,
+        ) = zip(*batch)
         list_forest_metadata = None
     else:
         raise ValueError(f"unexpected dataset item length: {len(batch[0])}")
@@ -814,21 +978,33 @@ def custom_collate_fn(batch):
     PAFs_concatenated = torch.clamp(PAFs_concatenated, min=-ACT_1, max=ACT_1).contiguous()  # 范围限制在[-1, 1]
     # mask_concatenated = torch.clamp(mask_concatenated, min=ACT_0, max=ACT_1).contiguous()  # 范围限制在[0, 0.99999]
     unet_concatenated = torch.clamp(unet_concatenated, min=ACT_0, max=ACT_1).contiguous()  # 范围限制在[0, 0.99999]
-    heatmap_concatenated = torch.clamp(heatmap_concatenated, min=ACT_0, max=ACT_1).contiguous()  # 范围限制在[0, 0.99999]
+    heatmap_concatenated = torch.clamp(
+        heatmap_concatenated, min=ACT_0, max=ACT_1
+    ).contiguous()  # 范围限制在[0, 0.99999]
 
     detr_ids = list(ids1)
-    result = [images, points_left_up, edges,
-              PAFs_concatenated, mask_concatenated, unet_concatenated, heatmap_concatenated]
+    result = [
+        images,
+        points_left_up,
+        edges,
+        PAFs_concatenated,
+        mask_concatenated,
+        unet_concatenated,
+        heatmap_concatenated,
+    ]
     if list_forest_metadata is not None:
-        result.append({
-            "component_id": [item["component_id"] for item in list_forest_metadata],
-            "component_count": [item["component_count"] for item in list_forest_metadata],
-            "root_node_indices": [item["root_node_indices"] for item in list_forest_metadata],
-            "root_edge_index": [item["root_edge_index"] for item in list_forest_metadata],
-            "graph_topology": [item["graph_topology"] for item in list_forest_metadata],
-        })
+        result.append(
+            {
+                "component_id": [item["component_id"] for item in list_forest_metadata],
+                "component_count": [item["component_count"] for item in list_forest_metadata],
+                "root_node_indices": [item["root_node_indices"] for item in list_forest_metadata],
+                "root_edge_index": [item["root_edge_index"] for item in list_forest_metadata],
+                "graph_topology": [item["graph_topology"] for item in list_forest_metadata],
+            }
+        )
     result.append(detr_ids)
-    return result,
+    return (result,)
+
 
 ########################################################################################################################
 class obj:
@@ -899,7 +1075,9 @@ def build_train_val_datasets(data_config):
         if legacy_rotate:
             raise ValueError("DATA.FAST_SEGMENTATION_LOADER=true requires DATA.LEGACY_ROTATE=false")
         if str(segmentation_target_source).lower() != "external_mask":
-            raise ValueError("DATA.FAST_SEGMENTATION_LOADER=true requires DATA.SEGMENTATION_TARGET_SOURCE=external_mask")
+            raise ValueError(
+                "DATA.FAST_SEGMENTATION_LOADER=true requires DATA.SEGMENTATION_TARGET_SOURCE=external_mask"
+            )
         from treeformer_train.fast_seg_dataset import FastSegSupervisedDataset
 
         cache_mode = _get_data_attr(data_config, "SEG_CACHE_MODE", "none")
@@ -951,16 +1129,27 @@ def build_train_val_datasets(data_config):
             _limit_dataset(train_dataset, _get_data_attr(data_config, "TRAIN_LIMIT")),
             _limit_dataset(val_dataset, _get_data_attr(data_config, "VAL_LIMIT")),
         )
-    train_dataset = LoadCNNDataset(parent_path=train_path, max_size=data_config.MAX_SIZE, max_change_light_rate=0.3,
-                                   is_train=False, is_rotate=legacy_rotate, sample_transform=train_sample_transform,
-                                   segmentation_target_source=segmentation_target_source,
-                                   return_forest_metadata=return_forest_metadata,
-                                   strict_virtual_root_metadata=strict_virtual_root_metadata)
-    val_dataset = LoadCNNDataset(parent_path=val_path, max_size=data_config.MAX_SIZE, max_change_light_rate=0.3,
-                                 is_train=False, is_rotate=False,
-                                 segmentation_target_source=segmentation_target_source,
-                                 return_forest_metadata=return_forest_metadata,
-                                 strict_virtual_root_metadata=strict_virtual_root_metadata)
+    train_dataset = LoadCNNDataset(
+        parent_path=train_path,
+        max_size=data_config.MAX_SIZE,
+        max_change_light_rate=0.3,
+        is_train=False,
+        is_rotate=legacy_rotate,
+        sample_transform=train_sample_transform,
+        segmentation_target_source=segmentation_target_source,
+        return_forest_metadata=return_forest_metadata,
+        strict_virtual_root_metadata=strict_virtual_root_metadata,
+    )
+    val_dataset = LoadCNNDataset(
+        parent_path=val_path,
+        max_size=data_config.MAX_SIZE,
+        max_change_light_rate=0.3,
+        is_train=False,
+        is_rotate=False,
+        segmentation_target_source=segmentation_target_source,
+        return_forest_metadata=return_forest_metadata,
+        strict_virtual_root_metadata=strict_virtual_root_metadata,
+    )
     return (
         _limit_dataset(train_dataset, _get_data_attr(data_config, "TRAIN_LIMIT")),
         _limit_dataset(val_dataset, _get_data_attr(data_config, "VAL_LIMIT")),
@@ -1001,24 +1190,23 @@ def main(args):
     def get_local_size():
         if not is_dist_avail_and_initialized():
             return 1
-        return int(os.environ['LOCAL_SIZE'])
+        return int(os.environ["LOCAL_SIZE"])
 
     def get_local_rank():
         if not is_dist_avail_and_initialized():
             return 0
-        return int(os.environ['LOCAL_RANK'])
-
+        return int(os.environ["LOCAL_RANK"])
 
     with open(args.config) as f:
-        print('\n*** Config file')
+        print("\n*** Config file")
         print(args.config)
         config = yaml.load(f, Loader=yaml.FullLoader)
-        print(config['log']['message'])
+        print(config["log"]["message"])
     config = dict2obj(config)
-    os.environ["CUDA_VISIBLE_DEVICES"] = ','.join(map(str, args.cuda_visible_device))
+    os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(map(str, args.cuda_visible_device))
     local_rank = args.local_rank
     # dist.init_process_group(backend='gloo') # windows
-    dist.init_process_group(backend='nccl')
+    dist.init_process_group(backend="nccl")
     torch.cuda.set_device(args.local_rank)
     device = torch.device("cuda", local_rank)
 
@@ -1046,7 +1234,6 @@ def main(args):
         print("use edge")
         # from evaluator import build_evaluator
 
-
     # from trainer import build_trainer
     from models import build_model
     # from monai.losses import DiceCELoss
@@ -1064,7 +1251,6 @@ def main(args):
     # torch.backends.cudnn.enabled = True
     # torch.multiprocessing.set_sharing_strategy('file_system')
     # device = torch.device("cuda") if args.device=='cuda' else torch.device("cpu")
-
 
     # dataset_train = LoadCNNDataset(tgt_data_path=tgt_train_dataset_path, feature_path_1=img_train_dataset_path1,
     #                                feature_path_2=img_train_dataset_path2, tgt_detr_dataset_name="DETR_all_",
@@ -1085,10 +1271,16 @@ def main(args):
 
     num_workers = int(_get_data_attr(config.DATA, "NUM_WORKERS", 4))
 
-    train_loader = DataLoader(dataset_train, batch_size=config.DATA.BATCH_SIZE, shuffle=False,  ######
-                              collate_fn=custom_collate_fn, drop_last=True, pin_memory=True,
-                              num_workers=num_workers,
-                              sampler=train_sampler)
+    train_loader = DataLoader(
+        dataset_train,
+        batch_size=config.DATA.BATCH_SIZE,
+        shuffle=False,  ######
+        collate_fn=custom_collate_fn,
+        drop_last=True,
+        pin_memory=True,
+        num_workers=num_workers,
+        sampler=train_sampler,
+    )
     # dataloader_test = DataLoader(dataset_test, batch_size=1, shuffle=False,
     #                              collate_fn=custom_collate_fn, drop_last=True, pin_memory=True,
     #                                   num_workers=config.DATA.NUM_WORKERS)
@@ -1097,10 +1289,16 @@ def main(args):
     # dataset_val = torch.utils.data.Subset(dataset_val, val_indices[:1000])
     valid_sampler = torch.utils.data.distributed.DistributedSampler(dataset_val)
 
-    val_loader = DataLoader(dataset_val, batch_size=config.DATA.BATCH_SIZE, shuffle=False,
-                            collate_fn=custom_collate_fn, drop_last=True, pin_memory=True,
-                            num_workers=num_workers,
-                            sampler=valid_sampler)
+    val_loader = DataLoader(
+        dataset_val,
+        batch_size=config.DATA.BATCH_SIZE,
+        shuffle=False,
+        collate_fn=custom_collate_fn,
+        drop_last=True,
+        pin_memory=True,
+        num_workers=num_workers,
+        sampler=valid_sampler,
+    )
     if dist.get_rank() == 0:
         print("Dataset splits -> Train: {} | Valid: {}\n".format(len(dataset_train), len(dataset_val)))
 
@@ -1108,33 +1306,40 @@ def main(args):
 
     param_dicts = [
         {
-            "params":
-                [p for n, p in net.named_parameters()
-                 if not match_name_keywords(n, ["encoder.0"]) and not match_name_keywords(n, ['reference_points',
-                                                                                              'sampling_offsets']) and p.requires_grad],
-            "lr": float(config.TRAIN.LR)
+            "params": [
+                p
+                for n, p in net.named_parameters()
+                if not match_name_keywords(n, ["encoder.0"])
+                and not match_name_keywords(n, ["reference_points", "sampling_offsets"])
+                and p.requires_grad
+            ],
+            "lr": float(config.TRAIN.LR),
         },
         {
-            "params": [p for n, p in net.named_parameters() if match_name_keywords(n, ["encoder.0"]) and p.requires_grad],
-            "lr": float(config.TRAIN.LR_BACKBONE)
+            "params": [
+                p for n, p in net.named_parameters() if match_name_keywords(n, ["encoder.0"]) and p.requires_grad
+            ],
+            "lr": float(config.TRAIN.LR_BACKBONE),
         },
         {
-            "params": [p for n, p in net.named_parameters() if
-                       match_name_keywords(n, ['reference_points', 'sampling_offsets']) and p.requires_grad],
-            "lr": float(config.TRAIN.LR) * 0.1
-        }
+            "params": [
+                p
+                for n, p in net.named_parameters()
+                if match_name_keywords(n, ["reference_points", "sampling_offsets"]) and p.requires_grad
+            ],
+            "lr": float(config.TRAIN.LR) * 0.1,
+        },
     ]
 
-    optimizer = torch.optim.AdamW(
-        param_dicts, lr=float(config.TRAIN.LR), weight_decay=float(config.TRAIN.WEIGHT_DECAY)
-    )
+    optimizer = torch.optim.AdamW(param_dicts, lr=float(config.TRAIN.LR), weight_decay=float(config.TRAIN.WEIGHT_DECAY))
 
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, config.TRAIN.LR_DROP)
     last_epoch = 1
 
     if args.resume:
-        checkpoint = torch.load(args.resume, map_location='cpu')
+        checkpoint = torch.load(args.resume, map_location="cpu")
         from collections import OrderedDict
+
         new_state_dict = OrderedDict()
         for k, v in checkpoint["net"].items():
             name = k[7:]  # remove `module.`
@@ -1145,8 +1350,8 @@ def main(args):
 
         # net.load_state_dict(checkpoint["net2"])
 
-        optimizer.load_state_dict(checkpoint['optimizer'])
-        scheduler.load_state_dict(checkpoint['scheduler'])
+        optimizer.load_state_dict(checkpoint["optimizer"])
+        scheduler.load_state_dict(checkpoint["scheduler"])
         last_epoch = scheduler.last_epoch
         print(last_epoch)
 
@@ -1158,7 +1363,14 @@ def main(args):
     matcher = build_matcher(config)
     loss = SetCriterion(config=config, matcher=matcher, net=net, args=args)
     val_smd_loss = []
-    train_total_loss, train_class_loss, train_nodes_loss, train_edges_loss, train_boxes_loss, train_cards_loss = [], [], [], [], [], []
+    train_total_loss, train_class_loss, train_nodes_loss, train_edges_loss, train_boxes_loss, train_cards_loss = (
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+    )
     SMD = StreetMoverDistance(eps=1e-7, max_iter=100, reduction=MetricReduction.MEAN)
     epochs = config.TRAIN.EPOCHS - last_epoch + 1
     check_path = config.TRAIN.SAVE_PATH + "/runs/" + config.log.exp_name + "_" + str(config.DATA.SEED) + "/"
@@ -1188,18 +1400,35 @@ def main(args):
     for epoch in range(epochs):
         train_loader.sampler.set_epoch(epoch)
         epoch_start = time.time()
-        train_total, train_class, train_nodes, train_edges, train_boxes, train_cards = \
-            epoch_train(train_loader=train_loader, net=net, loss_function=loss, optimizer=optimizer,
-                        device=device, last_epoch=last_epoch, epoch_now=last_epoch + 1 + epoch, max_epoch=config.TRAIN.EPOCHS)
+        train_total, train_class, train_nodes, train_edges, train_boxes, train_cards = epoch_train(
+            train_loader=train_loader,
+            net=net,
+            loss_function=loss,
+            optimizer=optimizer,
+            device=device,
+            last_epoch=last_epoch,
+            epoch_now=last_epoch + 1 + epoch,
+            max_epoch=config.TRAIN.EPOCHS,
+        )
         smd_loss = epoch_val(val_loader=val_loader, net=net, config=config, device=device, SMD=SMD, args=args)
         # ========================log and plot=========================
         epoch_time = time.time() - epoch_start
         if dist.get_rank() == 0:
             print(
-                'Epoch {}/{} || Train total: {:.4f} class: {:.4f} nodes: {:.4f} edges: {:.4f} boxes: {:.4f} cards: {:.4f} || Val smd: {:.8f} '
-                ' take {:.4f} sec.'
-                    .format(epoch + 1, epochs, train_total, train_class, train_nodes, train_edges, train_boxes, train_cards,
-                            smd_loss, epoch_time))
+                "Epoch {}/{} || Train total: {:.4f} class: {:.4f} nodes: {:.4f} edges: {:.4f} boxes: {:.4f} cards: {:.4f} || Val smd: {:.8f} "
+                " take {:.4f} sec.".format(
+                    epoch + 1,
+                    epochs,
+                    train_total,
+                    train_class,
+                    train_nodes,
+                    train_edges,
+                    train_boxes,
+                    train_cards,
+                    smd_loss,
+                    epoch_time,
+                )
+            )
         val_smd_loss.append(smd_loss)
         train_total_loss.append(train_total)
         train_class_loss.append(train_class)
@@ -1210,70 +1439,77 @@ def main(args):
         # =========================save models=========================
         if min_loss_valid[0] > smd_loss and dist.get_rank() == 0:
             min_loss_valid = (smd_loss, epoch + 1)
-            checkpoint = {"net": net.state_dict(),  # 模型数据
-                          "net2": net.module.state_dict(),  # 模型数据
-                          "optimizer": optimizer.state_dict(),  # 优化器数据
-                          'scheduler': scheduler.state_dict(),
-                          }
-            path_checkpoint = check_path + 'checkpoint_{}_epoch.pkl'.format(epoch + 1 + last_epoch)
+            checkpoint = {
+                "net": net.state_dict(),  # 模型数据
+                "net2": net.module.state_dict(),  # 模型数据
+                "optimizer": optimizer.state_dict(),  # 优化器数据
+                "scheduler": scheduler.state_dict(),
+            }
+            path_checkpoint = check_path + "checkpoint_{}_epoch.pkl".format(epoch + 1 + last_epoch)
             torch.save(checkpoint, path_checkpoint)
-            np_path_checkpoint = check_path + 'checkpoint_{}_epoch.npz'.format(epoch + 1 + last_epoch)
-            np.savez(np_path_checkpoint,
-                     val_smd_loss=np.array(val_smd_loss),
-                     train_total_loss=np.array(train_total_loss),
-                     train_class_loss=np.array(train_class_loss),
-                     train_nodes_loss=np.array(train_nodes_loss),
-                     train_edges_loss=np.array(train_edges_loss),
-                     train_boxes_loss=np.array(train_boxes_loss),
-                     train_cards_loss=np.array(train_cards_loss)
-                     )
-            txt_path_checkpoint = check_path + '{}_epoch_{}_smd.txt'.format(epoch + 1 + last_epoch, smd_loss)
+            np_path_checkpoint = check_path + "checkpoint_{}_epoch.npz".format(epoch + 1 + last_epoch)
+            np.savez(
+                np_path_checkpoint,
+                val_smd_loss=np.array(val_smd_loss),
+                train_total_loss=np.array(train_total_loss),
+                train_class_loss=np.array(train_class_loss),
+                train_nodes_loss=np.array(train_nodes_loss),
+                train_edges_loss=np.array(train_edges_loss),
+                train_boxes_loss=np.array(train_boxes_loss),
+                train_cards_loss=np.array(train_cards_loss),
+            )
+            txt_path_checkpoint = check_path + "{}_epoch_{}_smd.txt".format(epoch + 1 + last_epoch, smd_loss)
             open(txt_path_checkpoint, "a")
             print("save models: {}".format(epoch + 1 + last_epoch))
 
         elif (epoch + 1 + last_epoch) % 10 == 0 and dist.get_rank() == 0:
-            checkpoint = {"net": net.state_dict(),  # 模型数据
-                          "net2": net.module.state_dict(),  # 模型数据
-                          "optimizer": optimizer.state_dict(),  # 优化器数据
-                          'scheduler': scheduler.state_dict(),
-                          }
-            path_checkpoint = check_path + 'checkpoint_{}_epoch.pkl'.format(epoch + 1 + last_epoch)
+            checkpoint = {
+                "net": net.state_dict(),  # 模型数据
+                "net2": net.module.state_dict(),  # 模型数据
+                "optimizer": optimizer.state_dict(),  # 优化器数据
+                "scheduler": scheduler.state_dict(),
+            }
+            path_checkpoint = check_path + "checkpoint_{}_epoch.pkl".format(epoch + 1 + last_epoch)
             torch.save(checkpoint, path_checkpoint)
-            np_path_checkpoint = check_path + 'checkpoint_{}_epoch.npz'.format(epoch + 1 + last_epoch)
-            np.savez(np_path_checkpoint,
-                     val_smd_loss=np.array(val_smd_loss),
-                     train_total_loss=np.array(train_total_loss),
-                     train_class_loss=np.array(train_class_loss),
-                     train_nodes_loss=np.array(train_nodes_loss),
-                     train_edges_loss=np.array(train_edges_loss),
-                     train_boxes_loss=np.array(train_boxes_loss),
-                     train_cards_loss=np.array(train_cards_loss)
-                     )
-            txt_path_checkpoint = check_path + '{}_epoch_{}_smd.txt'.format(epoch + 1 + last_epoch, smd_loss)
+            np_path_checkpoint = check_path + "checkpoint_{}_epoch.npz".format(epoch + 1 + last_epoch)
+            np.savez(
+                np_path_checkpoint,
+                val_smd_loss=np.array(val_smd_loss),
+                train_total_loss=np.array(train_total_loss),
+                train_class_loss=np.array(train_class_loss),
+                train_nodes_loss=np.array(train_nodes_loss),
+                train_edges_loss=np.array(train_edges_loss),
+                train_boxes_loss=np.array(train_boxes_loss),
+                train_cards_loss=np.array(train_cards_loss),
+            )
+            txt_path_checkpoint = check_path + "{}_epoch_{}_smd.txt".format(epoch + 1 + last_epoch, smd_loss)
             open(txt_path_checkpoint, "a")
             print("save models: {}".format(epoch + 1 + last_epoch))
 
         scheduler.step()
     if dist.get_rank() == 0:
-        checkpoint = {"net": net.state_dict(),  # 模型数据
-                      "net2": net.module.state_dict(),  # 模型数据
-                      "optimizer": optimizer.state_dict(),  # 优化器数据
-                      'scheduler': scheduler.state_dict(),
-                      }
-        path_checkpoint = check_path + 'checkpoint_{}_epoch.pkl'.format(epochs)
+        checkpoint = {
+            "net": net.state_dict(),  # 模型数据
+            "net2": net.module.state_dict(),  # 模型数据
+            "optimizer": optimizer.state_dict(),  # 优化器数据
+            "scheduler": scheduler.state_dict(),
+        }
+        path_checkpoint = check_path + "checkpoint_{}_epoch.pkl".format(epochs)
         torch.save(checkpoint, path_checkpoint)
-        np_path_checkpoint = check_path + 'checkpoint_{}_epoch.npz'.format(epochs)
-        np.savez(np_path_checkpoint,
-                 val_smd_loss=np.array(val_smd_loss),
-                 train_total_loss=np.array(train_total_loss),
-                 train_class_loss=np.array(train_class_loss),
-                 train_nodes_loss=np.array(train_nodes_loss),
-                 train_edges_loss=np.array(train_edges_loss),
-                 train_boxes_loss=np.array(train_boxes_loss),
-                 train_cards_loss=np.array(train_cards_loss)
-                 )
+        np_path_checkpoint = check_path + "checkpoint_{}_epoch.npz".format(epochs)
+        np.savez(
+            np_path_checkpoint,
+            val_smd_loss=np.array(val_smd_loss),
+            train_total_loss=np.array(train_total_loss),
+            train_class_loss=np.array(train_class_loss),
+            train_nodes_loss=np.array(train_nodes_loss),
+            train_edges_loss=np.array(train_edges_loss),
+            train_boxes_loss=np.array(train_boxes_loss),
+            train_cards_loss=np.array(train_cards_loss),
+        )
     print("\nTraining Completed!")
     print("Minimum loss on validation set: {} at epoch {}".format(min_loss_valid[0], min_loss_valid[1]))
+
 
 def match_name_keywords(n, name_keywords):
     out = False
@@ -1285,23 +1521,26 @@ def match_name_keywords(n, name_keywords):
 
 
 def get_args_parser():
-    parser = argparse.ArgumentParser('Set training param', add_help=False)
-    parser.add_argument('--config', default='configs/tree_2D_use_mst.yaml',
-                        help='config file (.yml) containing the hyper-parameters for training. '
-                             'If None, use the nnU-Net config. See /config for examples.')
-    parser.add_argument('--resume', default=None, help='checkpoint of the last epoch of the model')
-    parser.add_argument('--device', default='cuda',
-                        help='device to use for training')
-    parser.add_argument('--cuda_visible_device', nargs='*', type=int, default=[0],
-                        help='list of index where skip conn will be made')
-    parser.add_argument('--use_gnn', default=False, help='use gnn')
-    parser.add_argument('--use_mst_train', default=True, help='use mst train')
-    parser.add_argument('--local_rank', default=-1, type=int, help='node rank for distributed training')
+    parser = argparse.ArgumentParser("Set training param", add_help=False)
+    parser.add_argument(
+        "--config",
+        default="configs/tree_2D_use_mst.yaml",
+        help="config file (.yml) containing the hyper-parameters for training. "
+        "If None, use the nnU-Net config. See /config for examples.",
+    )
+    parser.add_argument("--resume", default=None, help="checkpoint of the last epoch of the model")
+    parser.add_argument("--device", default="cuda", help="device to use for training")
+    parser.add_argument(
+        "--cuda_visible_device", nargs="*", type=int, default=[0], help="list of index where skip conn will be made"
+    )
+    parser.add_argument("--use_gnn", default=False, help="use gnn")
+    parser.add_argument("--use_mst_train", default=True, help="use mst train")
+    parser.add_argument("--local_rank", default=-1, type=int, help="node rank for distributed training")
     return parser
 
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser('training Relationformer', parents=[get_args_parser()])
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser("training Relationformer", parents=[get_args_parser()])
     args = parser.parse_args()
 
     # import torch

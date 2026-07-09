@@ -107,21 +107,48 @@ class CheckpointManager:
             if self.save_best:
                 saved_best = self.save_dir / "best.pt"
                 self._atomic_save(
-                    self._payload(epoch=epoch, model=model, optimizer=optimizer, scheduler=scheduler, metrics=metrics, ema=ema, config=config, extra=extra),
+                    self._payload(
+                        epoch=epoch,
+                        model=model,
+                        optimizer=optimizer,
+                        scheduler=scheduler,
+                        metrics=metrics,
+                        ema=ema,
+                        config=config,
+                        extra=extra,
+                    ),
                     saved_best,
                 )
 
         if self.save_last:
             saved_last = self.save_dir / "last.pt"
             self._atomic_save(
-                self._payload(epoch=epoch, model=model, optimizer=optimizer, scheduler=scheduler, metrics=metrics, ema=ema, config=config, extra=extra),
+                self._payload(
+                    epoch=epoch,
+                    model=model,
+                    optimizer=optimizer,
+                    scheduler=scheduler,
+                    metrics=metrics,
+                    ema=ema,
+                    config=config,
+                    extra=extra,
+                ),
                 saved_last,
             )
 
         if self.save_every > 0 and epoch % self.save_every == 0:
             saved_periodic = self.save_dir / f"epoch_{epoch:06d}.pt"
             self._atomic_save(
-                self._payload(epoch=epoch, model=model, optimizer=optimizer, scheduler=scheduler, metrics=metrics, ema=ema, config=config, extra=extra),
+                self._payload(
+                    epoch=epoch,
+                    model=model,
+                    optimizer=optimizer,
+                    scheduler=scheduler,
+                    metrics=metrics,
+                    ema=ema,
+                    config=config,
+                    extra=extra,
+                ),
                 saved_periodic,
             )
 
@@ -138,10 +165,7 @@ def load_training_checkpoint(path: str | Path, map_location: str | torch.device 
 
 
 def _strip_module_prefix(state_dict: dict[str, Any]) -> dict[str, Any]:
-    return {
-        key.removeprefix("module."): value
-        for key, value in state_dict.items()
-    }
+    return {key.removeprefix("module."): value for key, value in state_dict.items()}
 
 
 def load_pretrained_model_weights(

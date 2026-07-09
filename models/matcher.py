@@ -2,19 +2,23 @@
 """
 Modules to compute the matching cost and solve the corresponding LSAP.
 """
+
 import torch
 from scipy.optimize import linear_sum_assignment
 from torch import nn
 import numpy as np
-INFTY_COST = 1e+5
+
+INFTY_COST = 1e5
+
 
 def linear_sum_assignment_with_inf(cost_matrix):
     cost_matrix = np.asarray(cost_matrix)
     nan = np.isnan(cost_matrix).any()
     if nan:
-        cost_matrix[np.isnan(cost_matrix)]=INFTY_COST
+        cost_matrix[np.isnan(cost_matrix)] = INFTY_COST
 
     return linear_sum_assignment(cost_matrix)
+
 
 class HungarianMatcher(nn.Module):
     """This class computes an assignment between the targets and the predictions of the network
@@ -77,15 +81,15 @@ class HungarianMatcher(nn.Module):
         #         [0, 4],
         #         [0, 5],
         #         [2, 3]], device='cuda:0')]
-        bs, num_queries = outputs['pred_nodes'].shape[:2]
+        bs, num_queries = outputs["pred_nodes"].shape[:2]
         # 本来是2*20*4 但是取节点坐标没有节点范围wh
 
         # We flatten to compute the cost matrices in a batch
-        out_nodes = outputs['pred_nodes'][...,:2].flatten(0, 1)  # [batch_size * num_queries, 2]
+        out_nodes = outputs["pred_nodes"][..., :2].flatten(0, 1)  # [batch_size * num_queries, 2]
         # 40*2  后面的2 是只取节点坐标没有节点范围wh
 
         # Also concat the target labels and boxes
-        tgt_nodes = torch.cat([v for v in targets['nodes']])
+        tgt_nodes = torch.cat([v for v in targets["nodes"]])
         # print(tgt_nodes)
         # tensor([[0.7763, 0.0778],
         #         [0.5247, 0.0943],
@@ -108,7 +112,7 @@ class HungarianMatcher(nn.Module):
         # cost_nodes  40*12 对应的意思是40个预测输出分别与12个答案进行L1计算损失  例：第一行 第一个输出与答案的12个的差距
 
         # Compute the cls cost
-        tgt_ids = torch.cat([torch.tensor([1]*v.shape[0]).to(out_nodes.device) for v in targets['nodes']])
+        tgt_ids = torch.cat([torch.tensor([1] * v.shape[0]).to(out_nodes.device) for v in targets["nodes"]])
         # targets['nodes']是一个list 先看v v的size就是6*2 6*2 两个数组
         # 所以tgt_ids（12,）全是1 tensor([1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], device='cuda:0')
         cost_class = -outputs["pred_logits"].flatten(0, 1).softmax(-1)[..., tgt_ids]
@@ -147,7 +151,7 @@ class HungarianMatcher(nn.Module):
         C = C.view(bs, num_queries, -1).cpu()
         # 到这里 C变成了 2 20 12 也就是节点的位置  和 预测节点是否为需要的节点的误差矩阵
 
-        sizes = [len(v) for v in targets['nodes']] # [6, 6]
+        sizes = [len(v) for v in targets["nodes"]]  # [6, 6]
         indices = [linear_sum_assignment_with_inf(c[i]) for i, c in enumerate(C.split(sizes, -1))]
         # print(C.split(sizes, -1)[0].shape)
         # torch.Size([2, 20, 6])

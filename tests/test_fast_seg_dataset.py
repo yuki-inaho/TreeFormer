@@ -121,7 +121,9 @@ def test_fast_seg_dataset_disk_cache_respects_resize_policy(tmp_path: Path):
     cache_dir = tmp_path / "cache" / "train"
 
     stats = build_fast_seg_cache(split_root=split_root, cache_dir=cache_dir, max_size=64, resize_policy="full")
-    dataset = FastSegSupervisedDataset(split_root, max_size=64, cache_mode="disk", cache_dir=cache_dir, resize_policy="full")
+    dataset = FastSegSupervisedDataset(
+        split_root, max_size=64, cache_mode="disk", cache_dir=cache_dir, resize_policy="full"
+    )
 
     assert stats == {"samples": 1, "written": 1, "skipped": 0}
     image, *_rest = dataset[0]

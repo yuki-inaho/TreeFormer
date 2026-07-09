@@ -52,9 +52,7 @@ def parse_run_spec(spec: str) -> RunSpec:
     elif len(parts) == 4:
         label, config, checkpoint, mode = parts
     else:
-        raise argparse.ArgumentTypeError(
-            "--run must be 'LABEL|CHECKPOINT|MODE' or 'LABEL|CONFIG|CHECKPOINT|MODE'"
-        )
+        raise argparse.ArgumentTypeError("--run must be 'LABEL|CHECKPOINT|MODE' or 'LABEL|CONFIG|CHECKPOINT|MODE'")
     if not label:
         raise argparse.ArgumentTypeError("run label must not be empty")
     if mode not in {"raw", "mst", "mst-dist", "vr-mst"}:
@@ -354,7 +352,9 @@ def make_panel_grid(
         normalized = []
         for panel in panels:
             scale = panel_width / float(panel.size[0])
-            normalized.append(panel.resize((panel_width, max(1, round(panel.size[1] * scale))), resample=_resampling_bilinear()))
+            normalized.append(
+                panel.resize((panel_width, max(1, round(panel.size[1] * scale))), resample=_resampling_bilinear())
+            )
         panels = normalized
 
     cell_width = max(panel.size[0] for panel in panels)
@@ -374,7 +374,9 @@ def make_panel_grid(
     return canvas
 
 
-def try_load_ground_truth(image_path: Path, gt_dir: Path | None, image_size: tuple[int, int]) -> tuple[np.ndarray, np.ndarray] | None:
+def try_load_ground_truth(
+    image_path: Path, gt_dir: Path | None, image_size: tuple[int, int]
+) -> tuple[np.ndarray, np.ndarray] | None:
     candidates: list[Path] = []
     for directory in [gt_dir, image_path.parent]:
         if directory is None:
@@ -473,10 +475,14 @@ def _resampling_bilinear() -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="TreeFormer per-image inference panel renderer")
-    parser.add_argument("--config", default=None, help="Default legacy YAML config for runs without embedded Hydra config")
+    parser.add_argument(
+        "--config", default=None, help="Default legacy YAML config for runs without embedded Hydra config"
+    )
     parser.add_argument("--legacy-split-root", default=None, help="Optional split root with img/ and data/ directories")
     parser.add_argument("--image-dir", default=None, help="Directory containing input images")
-    parser.add_argument("--gt-dir", default=None, help="Directory containing *_annotation.json, .json, or .pt ground truth")
+    parser.add_argument(
+        "--gt-dir", default=None, help="Directory containing *_annotation.json, .json, or .pt ground truth"
+    )
     parser.add_argument("--output-dir", required=True, help="Directory where panels are saved")
     parser.add_argument(
         "--run",
@@ -485,7 +491,9 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Run spec: 'LABEL|CHECKPOINT|MODE' or 'LABEL|CONFIG|CHECKPOINT|MODE'. MODE is raw, mst, mst-dist, or vr-mst.",
     )
-    parser.add_argument("--weights", default="auto", choices=("auto", "ema", "model"), help="Checkpoint weights to load")
+    parser.add_argument(
+        "--weights", default="auto", choices=("auto", "ema", "model"), help="Checkpoint weights to load"
+    )
     parser.add_argument("--legacy-key", default="net", help="Legacy checkpoint state_dict key")
     parser.add_argument("--device", default="cuda", choices=("cuda", "cpu"), help="Inference device")
     parser.add_argument("--cuda-visible-devices", default=None, help="Optional CUDA_VISIBLE_DEVICES value")
@@ -535,7 +543,9 @@ def main() -> None:
     configs: dict[str, AttrDict] = {}
     for run in args.run:
         checkpoint = load_checkpoint_mapping(run.checkpoint)
-        config = load_config_for_run(config_path=run.config, default_config_path=default_config_path, checkpoint=checkpoint)
+        config = load_config_for_run(
+            config_path=run.config, default_config_path=default_config_path, checkpoint=checkpoint
+        )
         configs[run.label] = config
         models[run.label] = load_model(
             config,

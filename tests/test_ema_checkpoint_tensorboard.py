@@ -33,7 +33,9 @@ def test_checkpoint_manager_saves_last_and_best_only_on_metric_improvement(tmp_p
     model = torch.nn.Linear(2, 1)
     optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
     scheduler = NullScheduler()
-    manager = CheckpointManager(tmp_path, metric_name="val/smd", mode="min", save_last=True, save_best=True, save_every=2)
+    manager = CheckpointManager(
+        tmp_path, metric_name="val/smd", mode="min", save_last=True, save_best=True, save_every=2
+    )
 
     first = manager.save(epoch=1, model=model, optimizer=optimizer, scheduler=scheduler, metrics={"val/smd": 0.5})
     assert first.saved_last == tmp_path / "last.pt"
@@ -74,12 +76,7 @@ def test_load_pretrained_model_weights_reads_legacy_net_with_module_prefix(tmp_p
         model.bias.zero_()
 
     source = torch.nn.Linear(2, 1)
-    checkpoint = {
-        "net": {
-            f"module.{name}": value.detach().clone()
-            for name, value in source.state_dict().items()
-        }
-    }
+    checkpoint = {"net": {f"module.{name}": value.detach().clone() for name, value in source.state_dict().items()}}
     path = tmp_path / "legacy.pkl"
     torch.save(checkpoint, path)
 

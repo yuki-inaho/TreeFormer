@@ -40,6 +40,38 @@ def _nested_mapping_get(mapping: Mapping[str, Any], path: tuple[str, ...], defau
     return value
 
 
+def _as_int_array(values: Any) -> np.ndarray | None:
+    if values is None:
+        return None
+    if isinstance(values, torch.Tensor):
+        values = values.detach().cpu().numpy()
+    array = np.asarray(values)
+    if array.size == 0:
+        return np.empty((0,), dtype=np.int64)
+    return np.asarray(array, dtype=np.int64).reshape(-1)
+
+
+def _as_int_pair_array(values: Any) -> np.ndarray | None:
+    if values is None:
+        return None
+    if isinstance(values, torch.Tensor):
+        values = values.detach().cpu().numpy()
+    array = np.asarray(values)
+    if array.size == 0:
+        return np.empty((0, 2), dtype=np.int64)
+    if array.size % 2 != 0:
+        return None
+    return np.asarray(array, dtype=np.int64).reshape(-1, 2)
+
+
+def _compact_component_id_summary(component_ids: Any) -> list[dict[str, int]]:
+    array = _as_int_array(component_ids)
+    if array is None or array.size == 0:
+        return []
+    unique, counts = np.unique(array, return_counts=True)
+    return [{"component_id": int(cid), "node_count": int(count)} for cid, count in zip(unique, counts)]
+
+
 def _resampling_bilinear() -> int:
     return getattr(Image, "Resampling", Image).BILINEAR
 
@@ -220,6 +252,7 @@ def build_aux_panel_dataset(
                 heatmap_cutoff=float(checkpoint_data_value(checkpoint, "AUX_HEATMAP_CUTOFF", 0.01)),
                 paf_line_thickness=int(checkpoint_data_value(checkpoint, "AUX_PAF_LINE_THICKNESS", 2)),
                 paf_mask_thickness=int(checkpoint_data_value(checkpoint, "AUX_PAF_MASK_THICKNESS", 6)),
+                return_forest_metadata=True,
             ),
             "fast-seg",
         )
@@ -234,14 +267,46 @@ def build_aux_panel_dataset(
             is_train=False,
             is_rotate=False,
             segmentation_target_source=str(checkpoint_data_value(checkpoint, "SEGMENTATION_TARGET_SOURCE", "auto")),
+            return_forest_metadata=True,
         ),
         "legacy",
     )
 
 
-def unpack_aux_panel_sample(sample: Any) -> tuple[torch.Tensor, str, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, str]:
-    image, label, _nodes, _edges, pafs, _mask, segmentation, heatmap, sample_id = sample
-    return (
+def unpack_aux_panel_sample(
+    sample: Any, *, return_metadata: bool = False
+) -> (
+    tuple[torch.Tensor, str, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, str]
+    | tuple[
+        torch.Tensor,
+        str,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        str,
+        Mapping[str, Any],
+    ]
+):
+    if not isinstance(sample, tuple) and not isinstance(sample, list):
+        raise ValueError(f"unexpected aux sample type: {type(sample)!r}")
+
+    sample = tuple(sample)
+    if len(sample) not in (9, 10):
+        raise ValueError(f"unexpected aux sample length: {len(sample)}")
+
+    image, label, _nodes, _edges, pafs, _mask, segmentation, heatmap = sample[:8]
+    if len(sample) == 9:
+        forest_metadata = None
+        sample_id = sample[-1]
+    else:
+        forest_metadata = sample[-2]
+        sample_id = sample[-1]
+
+    if not isinstance(forest_metadata, Mapping):
+        forest_metadata = None
+
+    unpacked = (
         image,
         str(label),
         pafs,
@@ -250,6 +315,10 @@ def unpack_aux_panel_sample(sample: Any) -> tuple[torch.Tensor, str, torch.Tenso
         sample_id,
         Path(str(sample_id or label)).stem,
     )
+
+    if return_metadata:
+        return unpacked + (forest_metadata,)
+    return unpacked
 
 
 def predict_aux_maps(
@@ -340,7 +409,12 @@ def make_aux_panel(
 
 
 def write_aux_summary_json(
-    path: Path, *, sample_id: str, prediction: Mapping[str, torch.Tensor], targets: Mapping[str, torch.Tensor]
+    path: Path,
+    *,
+    sample_id: str,
+    prediction: Mapping[str, torch.Tensor],
+    targets: Mapping[str, torch.Tensor],
+    forest_metadata: Mapping[str, Any] | None = None,
 ) -> None:
     pred_seg = prediction["segmentation"]
     gt_seg = targets["segmentation"]
@@ -360,6 +434,31 @@ def write_aux_summary_json(
     if "detail_boundary" in prediction:
         payload["pred_detail_boundary_mean"] = float(prediction["detail_boundary"].mean())
         payload["gt_detail_boundary_mean"] = float(make_detail_edge_map(gt_seg).mean())
+
+    if forest_metadata:
+        graph_topology = forest_metadata.get("graph_topology")
+        component_count = forest_metadata.get("component_count")
+        root_node_indices = forest_metadata.get("root_node_indices")
+        component_id = forest_metadata.get("component_id")
+        root_edge_index = forest_metadata.get("root_edge_index")
+
+        if graph_topology is not None:
+            payload["graph_topology"] = str(graph_topology)
+        if component_count is not None:
+            payload["component_count"] = int(component_count)
+
+        root_nodes = _as_int_array(root_node_indices)
+        if root_nodes is not None and root_nodes.size > 0:
+            payload["root_node_indices"] = root_nodes.astype(int).tolist()
+
+        edges = _as_int_pair_array(root_edge_index)
+        if edges is not None and edges.size > 0:
+            payload["root_edge_index"] = edges.astype(int).tolist()
+
+        component_id_summary = _compact_component_id_summary(component_id)
+        if component_id_summary:
+            payload["component_id_summary"] = component_id_summary
+            payload["component_id_count"] = int(len(component_id_summary))
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
@@ -435,7 +534,8 @@ def main() -> None:
     print(f"Rendering {limit} aux panels from {args.legacy_split_root} with {loader_name} loader")
 
     for index in range(limit):
-        image, _label, pafs, segmentation, heatmap, sample_id, sample_name = unpack_aux_panel_sample(dataset[index])
+        unpacked = unpack_aux_panel_sample(dataset[index], return_metadata=True)
+        image, _label, pafs, segmentation, heatmap, sample_id, sample_name, forest_metadata = unpacked
         target_size = (int(segmentation.shape[-2]), int(segmentation.shape[-1]))
         prediction = predict_aux_maps(model, image, device, target_size)
         panel = make_aux_panel(
@@ -464,6 +564,7 @@ def main() -> None:
                 sample_id=sample_name,
                 prediction=prediction,
                 targets=targets,
+                forest_metadata=forest_metadata,
             )
         print(f"[{index + 1}/{limit}] saved: {panel_path}")
 

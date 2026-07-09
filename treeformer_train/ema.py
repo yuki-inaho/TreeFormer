@@ -50,7 +50,13 @@ class ModelEma:
             raise RuntimeError("EMA weights are already applied; call restore() before applying again")
         module = unwrap_model(model)
         self.backup = {name: value.detach().clone() for name, value in module.state_dict().items()}
-        module.load_state_dict({name: value.to(next(module.parameters()).device) if value.is_floating_point() else value for name, value in self.shadow.items()}, strict=True)
+        module.load_state_dict(
+            {
+                name: value.to(next(module.parameters()).device) if value.is_floating_point() else value
+                for name, value in self.shadow.items()
+            },
+            strict=True,
+        )
 
     @torch.no_grad()
     def restore(self, model: torch.nn.Module) -> None:
@@ -76,4 +82,6 @@ class ModelEma:
         shadow = state_dict.get("shadow")
         if not isinstance(shadow, dict):
             raise ValueError("EMA state_dict must contain a shadow dictionary")
-        self.shadow = {str(name): value.detach().clone() for name, value in shadow.items() if isinstance(value, torch.Tensor)}
+        self.shadow = {
+            str(name): value.detach().clone() for name, value in shadow.items() if isinstance(value, torch.Tensor)
+        }

@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -160,3 +161,76 @@ def test_build_aux_panel_dataset_uses_fast_loader_for_fast_seg_checkpoint(tmp_pa
     assert image_tensor.shape[-1] == 32
     assert segmentation.max().item() == 1.0
     assert heatmap.max().item() > 0.9
+
+
+def test_unpack_aux_panel_sample_accepts_virtual_root_metadata():
+    sample = (
+        torch.zeros(3, 4, 5),
+        "label",
+        torch.zeros((2, 2)),
+        torch.zeros((1, 2), dtype=torch.long),
+        torch.zeros((2, 4, 5)),
+        torch.zeros((4, 5)),
+        torch.zeros((4, 5)),
+        torch.zeros((4, 5)),
+        {
+            "graph_topology": "virtual_root_forest_v1",
+            "component_count": 2,
+            "root_node_indices": torch.tensor([0, 2], dtype=torch.long),
+            "root_edge_index": torch.tensor([[0, 1], [2, 3]], dtype=torch.long),
+            "component_id": torch.tensor([0, 0, 1, 1], dtype=torch.long),
+        },
+        "sample.pt",
+    )
+
+    image, label, pafs, segmentation, heatmap, _sample_id, sample_name, metadata = unpack_aux_panel_sample(
+        sample, return_metadata=True
+    )
+
+    assert image.shape == (3, 4, 5)
+    assert label == "label"
+    assert pafs.shape == (2, 4, 5)
+    assert segmentation.shape == (4, 5)
+    assert heatmap.shape == (4, 5)
+    assert sample_name == "sample"
+    assert metadata is not None
+    assert metadata["graph_topology"] == "virtual_root_forest_v1"
+
+
+def test_write_aux_summary_json_includes_virtual_root_metadata_when_present(tmp_path: Path):
+    prediction = {
+        "segmentation": torch.zeros(16, 16),
+        "heatmap": torch.zeros(16, 16),
+        "paf": torch.zeros(2, 16, 16),
+    }
+    forest_metadata = {
+        "graph_topology": "virtual_root_forest_v1",
+        "component_count": 2,
+        "root_node_indices": torch.tensor([0, 2], dtype=torch.long),
+        "root_edge_index": torch.tensor([[0, 1], [2, 3]], dtype=torch.long),
+        "component_id": torch.tensor([0, 0, 1, 1], dtype=torch.long),
+    }
+
+    output = tmp_path / "summary.json"
+    write_aux_summary_json(
+        output,
+        sample_id="sample",
+        prediction=prediction,
+        targets={
+            "segmentation": torch.zeros(16, 16),
+            "heatmap": torch.zeros(16, 16),
+            "paf": torch.zeros(2, 16, 16),
+        },
+        forest_metadata=forest_metadata,
+    )
+
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["sample_id"] == "sample"
+    assert payload["graph_topology"] == "virtual_root_forest_v1"
+    assert payload["component_count"] == 2
+    assert payload["root_node_indices"] == [0, 2]
+    assert payload["root_edge_index"] == [[0, 1], [2, 3]]
+    assert payload["component_id_summary"] == [
+        {"component_id": 0, "node_count": 2},
+        {"component_id": 1, "node_count": 2},
+    ]

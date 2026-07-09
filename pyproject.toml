@@ -52,3 +52,33 @@ explicit = true
 [tool.ruff]
 line-length = 120
 target-version = "py310"
+extend-exclude = [
+    "temp",
+    ".agents",
+    ".venv",
+    "metric_map.py",
+    "metric_smd.py",
+    "metric_topo",
+    "models/deformable_detr_2D.py",
+    "models/deformable_detr_backbone.py",
+    "models/ops/test.py",
+    "train_unmst.py",
+    "trainer.py",
+    "valid_smd_guyot_nx.py",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F403"]
+"losses_only.py" = ["F401", "F821", "F841"]
+"models/ops/functions/__init__.py" = ["F401"]
+"models/ops/modules/__init__.py" = ["F401"]
+
+[tool.ruff.format]
+exclude = [
+    "losses_only.py",
+    "models/ops",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = ["temp", ".agents", ".venv"]

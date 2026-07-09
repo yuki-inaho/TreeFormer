@@ -29,7 +29,9 @@ class FastSegSample:
     mask_path: Path
 
 
-def _load_graph_annotation(path: Path, *, strict_virtual_root_metadata: bool = False) -> tuple[torch.Tensor, torch.Tensor, dict[str, Any]]:
+def _load_graph_annotation(
+    path: Path, *, strict_virtual_root_metadata: bool = False
+) -> tuple[torch.Tensor, torch.Tensor, dict[str, Any]]:
     datapoint = torch.load(path, map_location="cpu", weights_only=False)
     if isinstance(datapoint, dict):
         raw_nodes = datapoint["list_DETR_points_left_up"]
@@ -137,8 +139,12 @@ def discover_fast_seg_samples(split_root: str | Path) -> list[FastSegSample]:
                 if mask_path is not None:
                     break
         if mask_path is None:
-            raise FileNotFoundError(f"missing segmentation mask for sample {sample_id!r} under {[str(item) for item in mask_dirs]}")
-        samples.append(FastSegSample(sample_id=sample_id, data_path=data_path, image_path=image_path, mask_path=mask_path))
+            raise FileNotFoundError(
+                f"missing segmentation mask for sample {sample_id!r} under {[str(item) for item in mask_dirs]}"
+            )
+        samples.append(
+            FastSegSample(sample_id=sample_id, data_path=data_path, image_path=image_path, mask_path=mask_path)
+        )
     return samples
 
 
@@ -209,12 +215,16 @@ def build_fast_seg_cache(
             max_size,
             resize_policy=resize_policy,
         )
-        detail = make_stdc_detail_boundary_target(
-            segmentation,
-            threshold=detail_threshold,
-            scales=detail_scales,
-            support_kernel_size=detail_support_kernel_size,
-        ).squeeze(0).squeeze(0)
+        detail = (
+            make_stdc_detail_boundary_target(
+                segmentation,
+                threshold=detail_threshold,
+                scales=detail_scales,
+                support_kernel_size=detail_support_kernel_size,
+            )
+            .squeeze(0)
+            .squeeze(0)
+        )
         nodes, edges, metadata = _load_graph_annotation(
             sample.data_path,
             strict_virtual_root_metadata=bool(strict_virtual_root_metadata),
@@ -351,19 +361,25 @@ class FastSegSupervisedDataset(Dataset):
             or load_forest_metadata(payload, nodes=payload["nodes"], edges=payload["edges"], strict_virtual_root=False),
         )
 
-    def _build_sample(self, sample: FastSegSample) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, dict[str, Any]]:
+    def _build_sample(
+        self, sample: FastSegSample
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, dict[str, Any]]:
         image, segmentation = _prepare_image_and_mask(
             sample.image_path,
             sample.mask_path,
             self.max_size,
             resize_policy=self.resize_policy,
         )
-        detail = make_stdc_detail_boundary_target(
-            segmentation,
-            threshold=self.detail_threshold,
-            scales=self.detail_scales,
-            support_kernel_size=self.detail_support_kernel_size,
-        ).squeeze(0).squeeze(0)
+        detail = (
+            make_stdc_detail_boundary_target(
+                segmentation,
+                threshold=self.detail_threshold,
+                scales=self.detail_scales,
+                support_kernel_size=self.detail_support_kernel_size,
+            )
+            .squeeze(0)
+            .squeeze(0)
+        )
         nodes, edges, metadata = _load_graph_annotation(
             sample.data_path,
             strict_virtual_root_metadata=self.strict_virtual_root_metadata,
@@ -375,7 +391,9 @@ class FastSegSupervisedDataset(Dataset):
             return self._memory_cache[index]
         sample = self.samples[index]
         if self.cache_mode == "disk":
-            image, segmentation, detail, nodes, edges, cached_pafs, cached_paf_mask, cached_heatmap, metadata = self._load_from_disk_cache(sample)
+            image, segmentation, detail, nodes, edges, cached_pafs, cached_paf_mask, cached_heatmap, metadata = (
+                self._load_from_disk_cache(sample)
+            )
         else:
             image, segmentation, detail, nodes, edges, metadata = self._build_sample(sample)
             cached_pafs = None
@@ -410,9 +428,7 @@ class FastSegSupervisedDataset(Dataset):
                 sample.data_path.name,
             )
         else:
-            item = item + (
-            sample.data_path.name,
-            )
+            item = item + (sample.data_path.name,)
         if self.cache_mode == "memory":
             self._memory_cache[index] = item
         return item
@@ -424,7 +440,9 @@ def _parse_scales(value: str) -> tuple[int, ...]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate repo-external cache files for FastSegSupervisedDataset")
-    parser.add_argument("--dataset-root", required=True, help="Legacy TreeFormer dataset root containing split directories")
+    parser.add_argument(
+        "--dataset-root", required=True, help="Legacy TreeFormer dataset root containing split directories"
+    )
     parser.add_argument("--cache-root", required=True, help="Directory where cache files will be written")
     parser.add_argument("--splits", nargs="+", default=["train", "val"], help="Split names to cache")
     parser.add_argument("--max-size", type=int, default=128, help="Model input max size")

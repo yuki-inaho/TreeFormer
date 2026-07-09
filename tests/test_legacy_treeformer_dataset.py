@@ -5,7 +5,7 @@ import pytest
 import torch
 from PIL import Image
 
-from train_mst import LoadCNNDataset, custom_collate_fn
+from train_mst import LoadCNNDataset, build_forest_paf_segments, custom_collate_fn
 
 
 def _write_legacy_treeformer_sample(root, *, with_unet=True):
@@ -125,3 +125,36 @@ def test_custom_collate_preserves_virtual_root_metadata(tmp_path):
     assert batch[-1] == ["sample.pt"]
     assert torch.equal(batch[-2]["component_id"][0], torch.tensor([0, 0, 1, 1]))
     assert batch[-2]["component_count"] == [2]
+
+
+def test_generate_pafs_handles_forest_components(tmp_path):
+    _write_virtual_root_treeformer_sample(tmp_path)
+    dataset = LoadCNNDataset(
+        parent_path=tmp_path,
+        max_size=64,
+        is_train=False,
+        is_rotate=False,
+        return_forest_metadata=True,
+        strict_virtual_root_metadata=True,
+    )
+
+    sample = dataset[0]
+    pafs = sample[4]
+    height, width = pafs.shape[:2]
+    second_component_y = int(0.1 * height)
+    second_component_x = int(0.85 * width)
+
+    assert abs(float(pafs[second_component_y, second_component_x, 0])) > 0.5
+
+
+def test_paf_does_not_draw_virtual_root_edges():
+    segments = build_forest_paf_segments(
+        node_count=4,
+        node_collections=[[0, 1], [2, 3]],
+        component_id=torch.tensor([0, 0, 1, 1]),
+        root_node_indices=torch.tensor([0, 2]),
+    )
+
+    assert [0, 1] in segments
+    assert [2, 3] in segments
+    assert all(segment not in ([0, 2], [1, 2], [0, 3]) for segment in segments)

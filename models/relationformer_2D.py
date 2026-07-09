@@ -2,9 +2,11 @@
 """
 RelationFormer model and criterion classes.
 """
+
 import torch
 import torch.nn.functional as F
 from torch import nn
+
 # from torchvision.ops import nms
 import copy
 
@@ -48,7 +50,7 @@ class AuxMapHead(nn.Module):
 
 
 class RelationFormer(nn.Module):
-    """ This is the RelationFormer module that performs object detection """
+    """This is the RelationFormer module that performs object detection"""
 
     def __init__(self, encoder, decoder, config, args):
         super().__init__()
@@ -58,7 +60,9 @@ class RelationFormer(nn.Module):
         self.use_mst_train = args.use_mst_train
         self.use_gnn = args.use_gnn
 
-        self.num_queries = config.MODEL.DECODER.OBJ_TOKEN + config.MODEL.DECODER.RLN_TOKEN + config.MODEL.DECODER.DUMMY_TOKEN
+        self.num_queries = (
+            config.MODEL.DECODER.OBJ_TOKEN + config.MODEL.DECODER.RLN_TOKEN + config.MODEL.DECODER.DUMMY_TOKEN
+        )
         self.obj_token = config.MODEL.DECODER.OBJ_TOKEN
         self.hidden_dim = config.MODEL.DECODER.HIDDEN_DIM
 
@@ -81,16 +85,24 @@ class RelationFormer(nn.Module):
                 1,
                 int(_get_attr(root_head_config, "NUM_LAYERS", 2)),
             )
-        
+
         if config.MODEL.DECODER.RLN_TOKEN > 0:
-            self.relation_embed = MLP(config.MODEL.DECODER.HIDDEN_DIM * (2 + config.MODEL.DECODER.RLN_TOKEN),
-                                          config.MODEL.DECODER.HIDDEN_DIM, 2, 3)
+            self.relation_embed = MLP(
+                config.MODEL.DECODER.HIDDEN_DIM * (2 + config.MODEL.DECODER.RLN_TOKEN),
+                config.MODEL.DECODER.HIDDEN_DIM,
+                2,
+                3,
+            )
         else:
-            self.relation_embed = MLP(config.MODEL.DECODER.HIDDEN_DIM*(2+config.MODEL.DECODER.RLN_TOKEN),
-                                          config.MODEL.DECODER.HIDDEN_DIM, 2, 3)
+            self.relation_embed = MLP(
+                config.MODEL.DECODER.HIDDEN_DIM * (2 + config.MODEL.DECODER.RLN_TOKEN),
+                config.MODEL.DECODER.HIDDEN_DIM,
+                2,
+                3,
+            )
 
         if not self.two_stage:
-            self.query_embed = nn.Embedding(self.num_queries, self.hidden_dim*2)    # why *2
+            self.query_embed = nn.Embedding(self.num_queries, self.hidden_dim * 2)  # why *2
             # 因为后面做 torch.split，用来划分tensor，可以从数量上划分，还有维度上划分
             # query_embed, tgt = torch.split(query_embed, c, dim=1)
             # 其中c=self.hidden_dim 256
@@ -100,23 +112,30 @@ class RelationFormer(nn.Module):
             input_proj_list = []
             for _ in range(num_backbone_outs):
                 in_channels = self.encoder.num_channels[_]
-                input_proj_list.append(nn.Sequential(
-                    nn.Conv2d(in_channels, self.hidden_dim, kernel_size=1),
-                    nn.GroupNorm(32, self.hidden_dim),
-                ))
+                input_proj_list.append(
+                    nn.Sequential(
+                        nn.Conv2d(in_channels, self.hidden_dim, kernel_size=1),
+                        nn.GroupNorm(32, self.hidden_dim),
+                    )
+                )
             for _ in range(self.num_feature_levels - num_backbone_outs):
-                input_proj_list.append(nn.Sequential(
-                    nn.Conv2d(in_channels, self.hidden_dim, kernel_size=3, stride=2, padding=1),
-                    nn.GroupNorm(32, self.hidden_dim),
-                ))
+                input_proj_list.append(
+                    nn.Sequential(
+                        nn.Conv2d(in_channels, self.hidden_dim, kernel_size=3, stride=2, padding=1),
+                        nn.GroupNorm(32, self.hidden_dim),
+                    )
+                )
                 in_channels = self.hidden_dim
             self.input_proj = nn.ModuleList(input_proj_list)
         else:
-            self.input_proj = nn.ModuleList([
-                nn.Sequential(
-                    nn.Conv2d(self.encoder.num_channels[0], self.hidden_dim, kernel_size=1),
-                    nn.GroupNorm(32, self.hidden_dim),
-                )])
+            self.input_proj = nn.ModuleList(
+                [
+                    nn.Sequential(
+                        nn.Conv2d(self.encoder.num_channels[0], self.hidden_dim, kernel_size=1),
+                        nn.GroupNorm(32, self.hidden_dim),
+                    )
+                ]
+            )
 
         aux_head_config = _get_attr(config.MODEL, "AUX_HEAD", None)
         self.aux_head = None
@@ -131,7 +150,6 @@ class RelationFormer(nn.Module):
 
         # self.decoder.decoder.bbox_embed = None
 
-
     def forward(self, samples):
         # 2*1*64*64
         # samples = nested_tensor_from_tensor_list([tensor.expand(3, -1, -1).contiguous() for tensor in samples])
@@ -145,7 +163,7 @@ class RelationFormer(nn.Module):
         # print(len(pos))
         # 3
 
-        # Create 
+        # Create
         srcs = []
         masks = []
         for level_idx, feat in enumerate(features):
@@ -235,13 +253,11 @@ class RelationFormer(nn.Module):
         # torch.Size([2, 256, 4, 4])
         # torch.Size([2, 256, 2, 2])
         # torch.Size([2, 256, 1, 1])
-    
-        hs, init_reference, inter_references, _, _ = self.decoder(
-            srcs, masks, query_embeds, pos
-        )
+
+        hs, init_reference, inter_references, _, _ = self.decoder(srcs, masks, query_embeds, pos)
         # 2 21 256    2 21 2    2 21 2
 
-        object_token = hs[...,:self.obj_token,:]
+        object_token = hs[..., : self.obj_token, :]
         # 2 20 256
 
         class_prob = self.class_embed(object_token)
@@ -250,21 +266,20 @@ class RelationFormer(nn.Module):
         coord_loc = self.bbox_embed(object_token).sigmoid()
         # 2 20 4
 
-        out.update({'pred_logits': class_prob, 'pred_nodes': coord_loc})
+        out.update({"pred_logits": class_prob, "pred_nodes": coord_loc})
         if self.root_embed is not None:
             out["pred_root_logits"] = self.root_embed(object_token).squeeze(-1)
         return hs, out
 
 
 class MLP(nn.Module):
-    """ Very simple multi-layer perceptron (also called FFN)"""
+    """Very simple multi-layer perceptron (also called FFN)"""
 
     def __init__(self, input_dim, hidden_dim, output_dim, num_layers):
         super().__init__()
         self.num_layers = num_layers
         h = [hidden_dim] * (num_layers - 1)
-        self.layers = nn.ModuleList(
-            nn.Linear(n, k) for n, k in zip([input_dim] + h, h + [output_dim]))
+        self.layers = nn.ModuleList(nn.Linear(n, k) for n, k in zip([input_dim] + h, h + [output_dim]))
 
     def forward(self, x):
         for i, layer in enumerate(self.layers):
@@ -275,17 +290,12 @@ class MLP(nn.Module):
 def _get_clones(module, N):
     return nn.ModuleList([copy.deepcopy(module) for i in range(N)])
 
+
 def build_relationformer(config, args, **kwargs):
 
     encoder = build_backbone(config)
     decoder = build_deforamble_transformer(config)
 
-    model = RelationFormer(
-        encoder,
-        decoder,
-        config,
-        args,
-        **kwargs
-    )
+    model = RelationFormer(encoder, decoder, config, args, **kwargs)
 
     return model

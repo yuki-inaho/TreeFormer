@@ -13,7 +13,15 @@ from treeformer_train.virtual_root import compute_virtual_root_forest_edges
 InferenceReturn = Union[
     Tuple[List[torch.Tensor], List[np.ndarray]],
     Tuple[List[torch.Tensor], List[np.ndarray], List[dict[str, Any]]],
-    Tuple[List[torch.Tensor], List[np.ndarray], List[np.ndarray], List[np.ndarray], List[np.ndarray], List[np.ndarray], List[np.ndarray]],
+    Tuple[
+        List[torch.Tensor],
+        List[np.ndarray],
+        List[np.ndarray],
+        List[np.ndarray],
+        List[np.ndarray],
+        List[np.ndarray],
+        List[np.ndarray],
+    ],
 ]
 
 
@@ -214,10 +222,10 @@ def relation_infer(
                 root_penalty=float(root_penalty),
             )
             selected_edges = forest.real_edges
-            pair_to_index = {
-                tuple(pair.tolist()): idx for idx, pair in enumerate(local_pairs.detach().cpu())
-            }
-            selected_rel = [pair_to_index[tuple(edge.tolist())] for edge in selected_edges if tuple(edge.tolist()) in pair_to_index]
+            pair_to_index = {tuple(pair.tolist()): idx for idx, pair in enumerate(local_pairs.detach().cpu())}
+            selected_rel = [
+                pair_to_index[tuple(edge.tolist())] for edge in selected_edges if tuple(edge.tolist()) in pair_to_index
+            ]
             pred_rel = torch.tensor(selected_rel, dtype=torch.long, device=relation_pred.device)
             if return_details:
                 pred_details.append(
@@ -236,9 +244,7 @@ def relation_infer(
                 )
             selected_edges = compute_mst_edges(local_pairs, cost_pred_batch)
             selected_rel = []
-            pair_to_index = {
-                tuple(pair.tolist()): idx for idx, pair in enumerate(local_pairs.detach().cpu())
-            }
+            pair_to_index = {tuple(pair.tolist()): idx for idx, pair in enumerate(local_pairs.detach().cpu())}
             for edge in selected_edges:
                 selected_rel.append(pair_to_index[tuple(edge.tolist())])
             pred_rel = torch.tensor(selected_rel, dtype=torch.long, device=relation_pred.device)

@@ -222,7 +222,9 @@ def _legacy_lr_for_name(name: str, train_cfg: Any, lr: float, lr_backbone: float
     return lr
 
 
-def _build_adamw_groups(model: torch.nn.Module, train_cfg: Any) -> tuple[list[dict[str, Any]], list[ParameterAssignment]]:
+def _build_adamw_groups(
+    model: torch.nn.Module, train_cfg: Any
+) -> tuple[list[dict[str, Any]], list[ParameterAssignment]]:
     lr = float(_get(train_cfg, "LR", 1e-4))
     lr_backbone = float(_get(train_cfg, "LR_BACKBONE", lr))
     weight_decay = float(_get(train_cfg, "WEIGHT_DECAY", 0.0))
@@ -234,7 +236,10 @@ def _build_adamw_groups(model: torch.nn.Module, train_cfg: Any) -> tuple[list[di
         assignments.append(
             ParameterAssignment(name, tuple(parameter.shape), "adamw", param_lr, weight_decay, "legacy_lr_partition")
         )
-    return ([{"params": params, "lr": group_lr, "weight_decay": weight_decay} for group_lr, params in buckets.items()], assignments)
+    return (
+        [{"params": params, "lr": group_lr, "weight_decay": weight_decay} for group_lr, params in buckets.items()],
+        assignments,
+    )
 
 
 def _split_muon_parameters(
@@ -264,12 +269,16 @@ def _split_muon_parameters(
         excluded = _matches_any(name, aux_keywords)
         if parameter.ndim >= 2 and (force_muon or not excluded):
             muon_params.append(parameter)
-            assignments.append(ParameterAssignment(name, tuple(parameter.shape), "muon", lr, muon_weight_decay, "matrix_hidden_weight"))
+            assignments.append(
+                ParameterAssignment(name, tuple(parameter.shape), "muon", lr, muon_weight_decay, "matrix_hidden_weight")
+            )
         else:
             param_lr = _legacy_lr_for_name(name, train_cfg, lr, lr_backbone)
             aux_buckets.setdefault(param_lr, []).append(parameter)
             reason = "ndim_lt_2" if parameter.ndim < 2 else "aux_keyword_or_head"
-            assignments.append(ParameterAssignment(name, tuple(parameter.shape), "adamw_aux", param_lr, aux_weight_decay, reason))
+            assignments.append(
+                ParameterAssignment(name, tuple(parameter.shape), "adamw_aux", param_lr, aux_weight_decay, reason)
+            )
 
     if not muon_params:
         raise ValueError("muon_schedulefree selected but no trainable parameter was assigned to Muon")
@@ -314,10 +323,14 @@ def build_optimizer_bundle(model: torch.nn.Module, train_cfg: Any, optimizer_cfg
 
     if name == "adamw_step":
         groups, assignments = _build_adamw_groups(model, train_cfg)
-        optimizer = torch.optim.AdamW(groups, lr=float(_get(train_cfg, "LR", 1e-4)), weight_decay=float(_get(train_cfg, "WEIGHT_DECAY", 0.0)))
+        optimizer = torch.optim.AdamW(
+            groups, lr=float(_get(train_cfg, "LR", 1e-4)), weight_decay=float(_get(train_cfg, "WEIGHT_DECAY", 0.0))
+        )
         lr_drop = int(_get(optimizer_cfg, "lr_drop", _get(train_cfg, "LR_DROP", 100)))
         scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=lr_drop)
-        return OptimizerBundle(optimizer=optimizer, scheduler=scheduler, assignments=assignments, requires_train_eval=False)
+        return OptimizerBundle(
+            optimizer=optimizer, scheduler=scheduler, assignments=assignments, requires_train_eval=False
+        )
 
     if name == "schedulefree_adamw":
         schedulefree = _import_schedulefree()
@@ -333,7 +346,9 @@ def build_optimizer_bundle(model: torch.nn.Module, train_cfg: Any, optimizer_cfg
             weight_lr_power=float(_get(optimizer_cfg, "weight_lr_power", 2.0)),
             foreach=bool(_get(optimizer_cfg, "foreach", True)),
         )
-        return OptimizerBundle(optimizer=optimizer, scheduler=NullScheduler(), assignments=assignments, requires_train_eval=True)
+        return OptimizerBundle(
+            optimizer=optimizer, scheduler=NullScheduler(), assignments=assignments, requires_train_eval=True
+        )
 
     if name == "muon_schedulefree":
         schedulefree = _import_schedulefree()
@@ -346,7 +361,9 @@ def build_optimizer_bundle(model: torch.nn.Module, train_cfg: Any, optimizer_cfg
             weight_lr_power=float(_get(optimizer_cfg, "weight_lr_power", 2.0)),
             r=float(_get(optimizer_cfg, "r", 0.0)),
         )
-        return OptimizerBundle(optimizer=optimizer, scheduler=NullScheduler(), assignments=assignments, requires_train_eval=True)
+        return OptimizerBundle(
+            optimizer=optimizer, scheduler=NullScheduler(), assignments=assignments, requires_train_eval=True
+        )
 
     raise ValueError(f"unsupported optimizer.name: {name!r}")
 

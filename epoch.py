@@ -7,14 +7,18 @@ import torch.distributed as dist
 
 import networkx as nx
 import numpy as np
+from inference_treeformer import relation_infer as shared_relation_infer
+
 
 def _dist_rank():
     if not dist.is_available() or not dist.is_initialized():
         return 0
     return dist.get_rank()
 
+
 def _unwrap_module(net):
     return net.module if hasattr(net, "module") else net
+
 
 def compute_mst_prim(node_pairs_valid, cost_pred_batch):
     # 创建 NetworkX 图
@@ -38,7 +42,7 @@ def compute_mst_prim(node_pairs_valid, cost_pred_batch):
     num_nodes = len(G)
     mst_adj_np = np.zeros((num_nodes, num_nodes))
     for u, v in mst_edges:
-        weight = G[u][v]['weight']
+        weight = G[u][v]["weight"]
         mst_adj_np[u, v] = weight
         mst_adj_np[v, u] = weight
 
@@ -48,6 +52,7 @@ def compute_mst_prim(node_pairs_valid, cost_pred_batch):
 
     return mst_adj_batch
 
+
 def relation_infer(h, out, net, obj_token, rln_token, nms=False, map_=False):
     # all token except the last one is object token
     # 2 21 256    dict  model   20 1   F  True
@@ -55,11 +60,11 @@ def relation_infer(h, out, net, obj_token, rln_token, nms=False, map_=False):
     # 2 20 256
     # last token is relation token
     if rln_token > 0:
-        relation_token = h[..., obj_token:obj_token + rln_token, :]
+        relation_token = h[..., obj_token : obj_token + rln_token, :]
         # 2 1 256
 
     # valid tokens
-    valid_token = torch.argmax(out['pred_logits'], -1).detach()
+    valid_token = torch.argmax(out["pred_logits"], -1).detach()
     # 返回指定维度最大值的序号
     # 第一个>第二个 0
     # 第二个>第一个 1
@@ -87,7 +92,7 @@ def relation_infer(h, out, net, obj_token, rln_token, nms=False, map_=False):
     # apply nms on valid tokens
     if nms:
         valid_token_nms = torch.zeros_like(valid_token)
-        for idx, (token, logits, nodes) in enumerate(zip(valid_token, out['pred_logits'], out['pred_nodes'])):
+        for idx, (token, logits, nodes) in enumerate(zip(valid_token, out["pred_logits"], out["pred_nodes"])):
             valid_token_id = torch.nonzero(token).squeeze(1)
 
             valid_logits, valid_nodes = logits[valid_token_id], nodes[valid_token_id]
@@ -97,8 +102,10 @@ def relation_infer(h, out, net, obj_token, rln_token, nms=False, map_=False):
             valid_nodes[:, 2:] = valid_nodes[:, :2] + 0.5
 
             ids2keep = batched_nms(
-                boxes=valid_nodes * 1000, scores=valid_scores, idxs=torch.ones_like(valid_scores, dtype=torch.long),
-                iou_threshold=0.90
+                boxes=valid_nodes * 1000,
+                scores=valid_scores,
+                idxs=torch.ones_like(valid_scores, dtype=torch.long),
+                iou_threshold=0.90,
             )
             valid_token_id_nms = valid_token_id[ids2keep].sort()[0]
             # print(valid_nodes.shape[0] - ids2keep.shape[0])
@@ -123,7 +130,7 @@ def relation_infer(h, out, net, obj_token, rln_token, nms=False, map_=False):
         # tensor([ 2,  6,  8, 12, 13, 16, 18], device='cuda:0')
 
         # coordinates of the valid tokens
-        pred_nodes.append(out['pred_nodes'][batch_id, node_id, :2].detach())
+        pred_nodes.append(out["pred_nodes"][batch_id, node_id, :2].detach())
         # 前2个为坐标  后面的为0.2 0.2 所以不需要
         # [tensor([[0.1841, 0.0691],
         #         [0.4373, 0.5390],
@@ -134,7 +141,7 @@ def relation_infer(h, out, net, obj_token, rln_token, nms=False, map_=False):
         #         [0.5259, 0.2376]], device='cuda:0')]
 
         if map_:
-            pred_nodes_boxes.append(out['pred_nodes'][batch_id, node_id, :].detach().cpu().numpy())
+            pred_nodes_boxes.append(out["pred_nodes"][batch_id, node_id, :].detach().cpu().numpy())
             # [array([[0.18412243, 0.06907109, 0.1967704 , 0.19651298],
             #        [0.43725446, 0.5389896 , 0.19494587, 0.19415428],
             #        [0.3559776 , 0.3794247 , 0.19489756, 0.19481266],
@@ -142,8 +149,9 @@ def relation_infer(h, out, net, obj_token, rln_token, nms=False, map_=False):
             #        [0.49280432, 0.88256013, 0.19605483, 0.19701621],
             #        [0.2771306 , 0.32960707, 0.19484201, 0.1947407 ],
             #        [0.52590996, 0.23761915, 0.19810419, 0.19754113]], dtype=float32)]  加入了0.2 0.2
-            pred_nodes_boxes_score.append(out['pred_logits'].softmax(-1)[
-                                              batch_id, node_id, 1].detach().cpu().numpy())  # TODO: generalize over multi-class
+            pred_nodes_boxes_score.append(
+                out["pred_logits"].softmax(-1)[batch_id, node_id, 1].detach().cpu().numpy()
+            )  # TODO: generalize over multi-class
             # [array([0.99989915, 0.99989164, 0.99963665, 0.99967265, 0.99997485,
             #        0.9995617 , 0.99777764], dtype=float32)]
             #        对最后一个维度取softmax 得到每一种概率 然后只取 指定的batch 指定的node_id的第二维度的值  class：选择 【0，1】不选择【1，0】
@@ -153,7 +161,6 @@ def relation_infer(h, out, net, obj_token, rln_token, nms=False, map_=False):
             # [array([1, 1, 1, 1, 1, 1, 1], dtype=int64)]
 
         if node_id.dim() != 0 and node_id.nelement() != 0 and node_id.shape[0] > 1:
-
             # all possible node pairs in all token ordering
             node_pairs = [list(i) for i in list(itertools.combinations(list(node_id), 2))]
             # [[tensor(2, device='cuda:0'), tensor(6, device='cuda:0')],
@@ -172,7 +179,9 @@ def relation_infer(h, out, net, obj_token, rln_token, nms=False, map_=False):
             # 21 = 6+5+4+2+3+2+1 = 21
 
             # node pairs in valid token order
-            node_pairs_valid = torch.tensor([list(i) for i in list(itertools.combinations(list(range(len(node_id))), 2))])
+            node_pairs_valid = torch.tensor(
+                [list(i) for i in list(itertools.combinations(list(range(len(node_id))), 2))]
+            )
             # tensor([[0, 1],
             #         [0, 2],
             #         [0, 3],
@@ -196,19 +205,31 @@ def relation_infer(h, out, net, obj_token, rln_token, nms=False, map_=False):
             #         [5, 6]])1
             # concatenate valid object pairs relation feature
             if rln_token > 0:
-                relation_feature1 = torch.cat((object_token[batch_id, node_pairs[0], :],
-                                               object_token[batch_id, node_pairs[1], :],
-                                               relation_token[batch_id, ...].view(1, -1).repeat(len(node_pairs_valid), 1)), 1)
+                relation_feature1 = torch.cat(
+                    (
+                        object_token[batch_id, node_pairs[0], :],
+                        object_token[batch_id, node_pairs[1], :],
+                        relation_token[batch_id, ...].view(1, -1).repeat(len(node_pairs_valid), 1),
+                    ),
+                    1,
+                )
                 # 第一个是将node1 node2这种顺序加入 然后将rln_token复制21倍 再cat 》21 768
-                relation_feature2 = torch.cat((object_token[batch_id, node_pairs[1], :],
-                                               object_token[batch_id, node_pairs[0], :],
-                                               relation_token[batch_id, ...].view(1, -1).repeat(len(node_pairs_valid), 1)), 1)
+                relation_feature2 = torch.cat(
+                    (
+                        object_token[batch_id, node_pairs[1], :],
+                        object_token[batch_id, node_pairs[0], :],
+                        relation_token[batch_id, ...].view(1, -1).repeat(len(node_pairs_valid), 1),
+                    ),
+                    1,
+                )
                 # 第二个是将node2 node1这种顺序加入 然后将rln_token复制21倍 再cat 》21 768
             else:
                 relation_feature1 = torch.cat(
-                    (object_token[batch_id, node_pairs[0], :], object_token[batch_id, node_pairs[1], :]), 1)
+                    (object_token[batch_id, node_pairs[0], :], object_token[batch_id, node_pairs[1], :]), 1
+                )
                 relation_feature2 = torch.cat(
-                    (object_token[batch_id, node_pairs[1], :], object_token[batch_id, node_pairs[0], :]), 1)
+                    (object_token[batch_id, node_pairs[1], :], object_token[batch_id, node_pairs[0], :]), 1
+                )
 
             relation_pred1 = _unwrap_module(net).relation_embed(relation_feature1).detach()
             # relation_feature1_idx_ = torch.randperm(relation_feature1.shape[0])
@@ -309,9 +330,18 @@ def relation_infer(h, out, net, obj_token, rln_token, nms=False, map_=False):
                 pred_edges_boxes_class.append(torch.empty(0, 1).cpu().numpy())
 
     if map_:
-        return pred_nodes, pred_edges, pred_nodes_boxes, pred_nodes_boxes_score, pred_nodes_boxes_class, pred_edges_boxes_score, pred_edges_boxes_class
+        return (
+            pred_nodes,
+            pred_edges,
+            pred_nodes_boxes,
+            pred_nodes_boxes_score,
+            pred_nodes_boxes_class,
+            pred_edges_boxes_score,
+            pred_edges_boxes_class,
+        )
     else:
         return pred_nodes, pred_edges
+
 
 def relation_infer_mst(h, out, net, obj_token, rln_token, nms=False, map_=False):
     # all token except the last one is object token
@@ -361,11 +391,11 @@ def relation_infer_mst(h, out, net, obj_token, rln_token, nms=False, map_=False)
     # 2 20 256
     # last token is relation token
     if rln_token > 0:
-        relation_token = h[..., obj_token:obj_token + rln_token, :]
+        relation_token = h[..., obj_token : obj_token + rln_token, :]
         # 2 1 256
 
     # valid tokens
-    valid_token = torch.argmax(out['pred_logits'], -1).detach()
+    valid_token = torch.argmax(out["pred_logits"], -1).detach()
     # 返回指定维度最大值的序号
     # 第一个>第二个 0
     # 第二个>第一个 1
@@ -393,7 +423,7 @@ def relation_infer_mst(h, out, net, obj_token, rln_token, nms=False, map_=False)
     # apply nms on valid tokens
     if nms:
         valid_token_nms = torch.zeros_like(valid_token)
-        for idx, (token, logits, nodes) in enumerate(zip(valid_token, out['pred_logits'], out['pred_nodes'])):
+        for idx, (token, logits, nodes) in enumerate(zip(valid_token, out["pred_logits"], out["pred_nodes"])):
             valid_token_id = torch.nonzero(token).squeeze(1)
 
             valid_logits, valid_nodes = logits[valid_token_id], nodes[valid_token_id]
@@ -403,8 +433,10 @@ def relation_infer_mst(h, out, net, obj_token, rln_token, nms=False, map_=False)
             valid_nodes[:, 2:] = valid_nodes[:, :2] + 0.5
 
             ids2keep = batched_nms(
-                boxes=valid_nodes * 1000, scores=valid_scores, idxs=torch.ones_like(valid_scores, dtype=torch.long),
-                iou_threshold=0.90
+                boxes=valid_nodes * 1000,
+                scores=valid_scores,
+                idxs=torch.ones_like(valid_scores, dtype=torch.long),
+                iou_threshold=0.90,
             )
             valid_token_id_nms = valid_token_id[ids2keep].sort()[0]
             # print(valid_nodes.shape[0] - ids2keep.shape[0])
@@ -430,7 +462,7 @@ def relation_infer_mst(h, out, net, obj_token, rln_token, nms=False, map_=False)
         cost_adj_batch = torch.ones((node_id.shape[0], node_id.shape[0])).to(h.device) * 9999
 
         # coordinates of the valid tokens
-        pred_nodes.append(out['pred_nodes'][batch_id, node_id, :2].detach())
+        pred_nodes.append(out["pred_nodes"][batch_id, node_id, :2].detach())
         # 前2个为坐标  后面的为0.2 0.2 所以不需要
         # [tensor([[0.1841, 0.0691],
         #         [0.4373, 0.5390],
@@ -441,7 +473,7 @@ def relation_infer_mst(h, out, net, obj_token, rln_token, nms=False, map_=False)
         #         [0.5259, 0.2376]], device='cuda:0')]
 
         if map_:
-            pred_nodes_boxes.append(out['pred_nodes'][batch_id, node_id, :].detach().cpu().numpy())
+            pred_nodes_boxes.append(out["pred_nodes"][batch_id, node_id, :].detach().cpu().numpy())
             # [array([[0.18412243, 0.06907109, 0.1967704 , 0.19651298],
             #        [0.43725446, 0.5389896 , 0.19494587, 0.19415428],
             #        [0.3559776 , 0.3794247 , 0.19489756, 0.19481266],
@@ -449,8 +481,9 @@ def relation_infer_mst(h, out, net, obj_token, rln_token, nms=False, map_=False)
             #        [0.49280432, 0.88256013, 0.19605483, 0.19701621],
             #        [0.2771306 , 0.32960707, 0.19484201, 0.1947407 ],
             #        [0.52590996, 0.23761915, 0.19810419, 0.19754113]], dtype=float32)]  加入了0.2 0.2
-            pred_nodes_boxes_score.append(out['pred_logits'].softmax(-1)[
-                                              batch_id, node_id, 1].detach().cpu().numpy())  # TODO: generalize over multi-class
+            pred_nodes_boxes_score.append(
+                out["pred_logits"].softmax(-1)[batch_id, node_id, 1].detach().cpu().numpy()
+            )  # TODO: generalize over multi-class
             # [array([0.99989915, 0.99989164, 0.99963665, 0.99967265, 0.99997485,
             #        0.9995617 , 0.99777764], dtype=float32)]
             #        对最后一个维度取softmax 得到每一种概率 然后只取 指定的batch 指定的node_id的第二维度的值  class：选择 【0，1】不选择【1，0】
@@ -460,7 +493,6 @@ def relation_infer_mst(h, out, net, obj_token, rln_token, nms=False, map_=False)
             # [array([1, 1, 1, 1, 1, 1, 1], dtype=int64)]
 
         if node_id.dim() != 0 and node_id.nelement() != 0 and node_id.shape[0] > 1:
-
             # all possible node pairs in all token ordering
             node_pairs = [list(i) for i in list(itertools.combinations(list(node_id), 2))]
             # [[tensor(2, device='cuda:0'), tensor(6, device='cuda:0')],
@@ -479,7 +511,9 @@ def relation_infer_mst(h, out, net, obj_token, rln_token, nms=False, map_=False)
             # 21 = 6+5+4+2+3+2+1 = 21
 
             # node pairs in valid token order
-            node_pairs_valid = torch.tensor([list(i) for i in list(itertools.combinations(list(range(len(node_id))), 2))])
+            node_pairs_valid = torch.tensor(
+                [list(i) for i in list(itertools.combinations(list(range(len(node_id))), 2))]
+            )
             # tensor([[0, 1],
             #         [0, 2],
             #         [0, 3],
@@ -507,19 +541,31 @@ def relation_infer_mst(h, out, net, obj_token, rln_token, nms=False, map_=False)
                 node_pair = node_pairs_valid[num]
                 node_pairs_valid_dict[tuple(node_pair.cpu().numpy().tolist())] = num
             if rln_token > 0:
-                relation_feature1 = torch.cat((object_token[batch_id, node_pairs[0], :],
-                                               object_token[batch_id, node_pairs[1], :],
-                                               relation_token[batch_id, ...].view(1, -1).repeat(len(node_pairs_valid), 1)), 1)
+                relation_feature1 = torch.cat(
+                    (
+                        object_token[batch_id, node_pairs[0], :],
+                        object_token[batch_id, node_pairs[1], :],
+                        relation_token[batch_id, ...].view(1, -1).repeat(len(node_pairs_valid), 1),
+                    ),
+                    1,
+                )
                 # 第一个是将node1 node2这种顺序加入 然后将rln_token复制21倍 再cat 》21 768
-                relation_feature2 = torch.cat((object_token[batch_id, node_pairs[1], :],
-                                               object_token[batch_id, node_pairs[0], :],
-                                               relation_token[batch_id, ...].view(1, -1).repeat(len(node_pairs_valid), 1)), 1)
+                relation_feature2 = torch.cat(
+                    (
+                        object_token[batch_id, node_pairs[1], :],
+                        object_token[batch_id, node_pairs[0], :],
+                        relation_token[batch_id, ...].view(1, -1).repeat(len(node_pairs_valid), 1),
+                    ),
+                    1,
+                )
                 # 第二个是将node2 node1这种顺序加入 然后将rln_token复制21倍 再cat 》21 768
             else:
                 relation_feature1 = torch.cat(
-                    (object_token[batch_id, node_pairs[0], :], object_token[batch_id, node_pairs[1], :]), 1)
+                    (object_token[batch_id, node_pairs[0], :], object_token[batch_id, node_pairs[1], :]), 1
+                )
                 relation_feature2 = torch.cat(
-                    (object_token[batch_id, node_pairs[1], :], object_token[batch_id, node_pairs[0], :]), 1)
+                    (object_token[batch_id, node_pairs[1], :], object_token[batch_id, node_pairs[0], :]), 1
+                )
 
             relation_pred1 = _unwrap_module(net).relation_embed(relation_feature1).detach()
             relation_pred2 = _unwrap_module(net).relation_embed(relation_feature2).detach()
@@ -566,8 +612,11 @@ def relation_infer_mst(h, out, net, obj_token, rln_token, nms=False, map_=False)
             # pred_edges = mst_tree_selected_list.cpu().numpy()
 
             # 生成 pred_rel_list
-            pred_rel_list = [node_pairs_valid_dict[tuple(sorted((int(xy[0]), int(xy[1]))))] for xy in
-                             mst_tree_selected_list if xy[0] != xy[1]]
+            pred_rel_list = [
+                node_pairs_valid_dict[tuple(sorted((int(xy[0]), int(xy[1]))))]
+                for xy in mst_tree_selected_list
+                if xy[0] != xy[1]
+            ]
 
             # 转换为 torch tensor
             pred_rel = torch.tensor(pred_rel_list).cpu().numpy()
@@ -585,9 +634,18 @@ def relation_infer_mst(h, out, net, obj_token, rln_token, nms=False, map_=False)
                 pred_edges_boxes_class.append(torch.empty(0, 1).cpu().numpy())
 
     if map_:
-        return pred_nodes, pred_edges, pred_nodes_boxes, pred_nodes_boxes_score, pred_nodes_boxes_class, pred_edges_boxes_score, pred_edges_boxes_class
+        return (
+            pred_nodes,
+            pred_edges,
+            pred_nodes_boxes,
+            pred_nodes_boxes_score,
+            pred_nodes_boxes_class,
+            pred_edges_boxes_score,
+            pred_edges_boxes_class,
+        )
     else:
         return pred_nodes, pred_edges
+
 
 def relation_infer_gnn(h, out, model, obj_token, rln_token, nms=False, map_=False):
     # all token except the last one is object token
@@ -637,11 +695,11 @@ def relation_infer_gnn(h, out, model, obj_token, rln_token, nms=False, map_=Fals
     # 2 20 256
     # last token is relation token
     if rln_token > 0:
-        relation_token = h[..., obj_token:obj_token + rln_token, :]
+        relation_token = h[..., obj_token : obj_token + rln_token, :]
         # 2 1 256
 
     # valid tokens
-    valid_token = torch.argmax(out['pred_logits'], -1).detach()
+    valid_token = torch.argmax(out["pred_logits"], -1).detach()
     # 返回指定维度最大值的序号
     # 第一个>第二个 0
     # 第二个>第一个 1
@@ -669,7 +727,7 @@ def relation_infer_gnn(h, out, model, obj_token, rln_token, nms=False, map_=Fals
     # apply nms on valid tokens
     if nms:
         valid_token_nms = torch.zeros_like(valid_token)
-        for idx, (token, logits, nodes) in enumerate(zip(valid_token, out['pred_logits'], out['pred_nodes'])):
+        for idx, (token, logits, nodes) in enumerate(zip(valid_token, out["pred_logits"], out["pred_nodes"])):
             valid_token_id = torch.nonzero(token).squeeze(1)
 
             valid_logits, valid_nodes = logits[valid_token_id], nodes[valid_token_id]
@@ -679,8 +737,10 @@ def relation_infer_gnn(h, out, model, obj_token, rln_token, nms=False, map_=Fals
             valid_nodes[:, 2:] = valid_nodes[:, :2] + 0.5
 
             ids2keep = batched_nms(
-                boxes=valid_nodes * 1000, scores=valid_scores, idxs=torch.ones_like(valid_scores, dtype=torch.long),
-                iou_threshold=0.90
+                boxes=valid_nodes * 1000,
+                scores=valid_scores,
+                idxs=torch.ones_like(valid_scores, dtype=torch.long),
+                iou_threshold=0.90,
             )
             valid_token_id_nms = valid_token_id[ids2keep].sort()[0]
             # print(valid_nodes.shape[0] - ids2keep.shape[0])
@@ -705,7 +765,7 @@ def relation_infer_gnn(h, out, model, obj_token, rln_token, nms=False, map_=Fals
         # tensor([ 2,  6,  8, 12, 13, 16, 18], device='cuda:0')
 
         # coordinates of the valid tokens
-        pred_nodes.append(out['pred_nodes'][batch_id, node_id, :2].detach())
+        pred_nodes.append(out["pred_nodes"][batch_id, node_id, :2].detach())
         # 前2个为坐标  后面的为0.2 0.2 所以不需要
         # [tensor([[0.1841, 0.0691],
         #         [0.4373, 0.5390],
@@ -716,7 +776,7 @@ def relation_infer_gnn(h, out, model, obj_token, rln_token, nms=False, map_=Fals
         #         [0.5259, 0.2376]], device='cuda:0')]
 
         if map_:
-            pred_nodes_boxes.append(out['pred_nodes'][batch_id, node_id, :].detach().cpu().numpy())
+            pred_nodes_boxes.append(out["pred_nodes"][batch_id, node_id, :].detach().cpu().numpy())
             # [array([[0.18412243, 0.06907109, 0.1967704 , 0.19651298],
             #        [0.43725446, 0.5389896 , 0.19494587, 0.19415428],
             #        [0.3559776 , 0.3794247 , 0.19489756, 0.19481266],
@@ -724,8 +784,9 @@ def relation_infer_gnn(h, out, model, obj_token, rln_token, nms=False, map_=Fals
             #        [0.49280432, 0.88256013, 0.19605483, 0.19701621],
             #        [0.2771306 , 0.32960707, 0.19484201, 0.1947407 ],
             #        [0.52590996, 0.23761915, 0.19810419, 0.19754113]], dtype=float32)]  加入了0.2 0.2
-            pred_nodes_boxes_score.append(out['pred_logits'].softmax(-1)[
-                                              batch_id, node_id, 1].detach().cpu().numpy())  # TODO: generalize over multi-class
+            pred_nodes_boxes_score.append(
+                out["pred_logits"].softmax(-1)[batch_id, node_id, 1].detach().cpu().numpy()
+            )  # TODO: generalize over multi-class
             # [array([0.99989915, 0.99989164, 0.99963665, 0.99967265, 0.99997485,
             #        0.9995617 , 0.99777764], dtype=float32)]
             #        对最后一个维度取softmax 得到每一种概率 然后只取 指定的batch 指定的node_id的第二维度的值  class：选择 【0，1】不选择【1，0】
@@ -735,7 +796,7 @@ def relation_infer_gnn(h, out, model, obj_token, rln_token, nms=False, map_=Fals
             # [array([1, 1, 1, 1, 1, 1, 1], dtype=int64)]
 
         if node_id.dim() != 0 and node_id.nelement() != 0 and node_id.shape[0] > 1:
-            n = out['pred_nodes'][batch_id, node_id, :2].detach()
+            n = out["pred_nodes"][batch_id, node_id, :2].detach()
             rearranged_object_token = object_token[batch_id, node_id, :]
             full_adj = torch.ones((n.shape[0], n.shape[0]), device=h.device)
             all_full_adj = []
@@ -746,9 +807,14 @@ def relation_infer_gnn(h, out, model, obj_token, rln_token, nms=False, map_=Fals
 
             # concatenate valid object pairs relation feature
             if rln_token > 0:
-                relation_feature = torch.cat([rearranged_object_token,  # 6 256 + 1 256 *6
-                                              relation_token[batch_id, ...].repeat(rearranged_object_token.shape[0], 1)], 1)
-                val_z = model.module.GAE_model.encode(relation_feature,all_full_adj).detach()
+                relation_feature = torch.cat(
+                    [
+                        rearranged_object_token,  # 6 256 + 1 256 *6
+                        relation_token[batch_id, ...].repeat(rearranged_object_token.shape[0], 1),
+                    ],
+                    1,
+                )
+                val_z = model.module.GAE_model.encode(relation_feature, all_full_adj).detach()
                 prob_adj = model.module.GAE_model.decoder.forward_all(val_z)
             else:
                 relation_feature = rearranged_object_token
@@ -787,9 +853,18 @@ def relation_infer_gnn(h, out, model, obj_token, rln_token, nms=False, map_=Fals
                 pred_edges_boxes_class.append(torch.empty(0, 1).cpu().numpy())
 
     if map_:
-        return pred_nodes, pred_edges, pred_nodes_boxes, pred_nodes_boxes_score, pred_nodes_boxes_class, pred_edges_boxes_score, pred_edges_boxes_class
+        return (
+            pred_nodes,
+            pred_edges,
+            pred_nodes_boxes,
+            pred_nodes_boxes_score,
+            pred_nodes_boxes_class,
+            pred_edges_boxes_score,
+            pred_edges_boxes_class,
+        )
     else:
         return pred_nodes, pred_edges
+
 
 # ########################################################################################
 # ########################################################################################
@@ -797,9 +872,20 @@ def relation_infer_gnn(h, out, model, obj_token, rln_token, nms=False, map_=Fals
 # ########################################################################################
 # ########################################################################################
 
-def epoch_train(train_loader, net, loss_function, optimizer,
-                device, last_epoch, epoch_now, max_epoch,
-                *, clip_max_norm=20.0, after_optimizer_step=None):
+
+def epoch_train(
+    train_loader,
+    net,
+    loss_function,
+    optimizer,
+    device,
+    last_epoch,
+    epoch_now,
+    max_epoch,
+    *,
+    clip_max_norm=20.0,
+    after_optimizer_step=None,
+):
     # 开启 anomaly detection
     # torch.autograd.set_detect_anomaly(True)
 
@@ -816,7 +902,7 @@ def epoch_train(train_loader, net, loss_function, optimizer,
 
         nodes = [node.to(device) for node in nodes]
         edges = [edge.to(device) for edge in edges]
-        target = {'nodes': nodes, 'edges': edges}
+        target = {"nodes": nodes, "edges": edges}
         if len(batchdata[0]) > 8 and isinstance(batchdata[0][-2], dict):
             target.update(batchdata[0][-2])
         # detr_ids = batchdata[0][-1]
@@ -825,20 +911,30 @@ def epoch_train(train_loader, net, loss_function, optimizer,
         h, out = net(images)
         # ================compute losses=================
         losses = loss_function(h, out, target, epoch_now, max_epoch, last_epoch)
-        loss_all[0].append(losses['total'].item())
-        loss_all[1].append(losses['class'].item())
-        loss_all[2].append(losses['nodes'].item())
-        loss_all[3].append(losses['edges'].item())
-        loss_all[4].append(losses['boxes'].item())
-        loss_all[5].append(losses['cards'].item())
-
-
+        loss_all[0].append(losses["total"].item())
+        loss_all[1].append(losses["class"].item())
+        loss_all[2].append(losses["nodes"].item())
+        loss_all[3].append(losses["edges"].item())
+        loss_all[4].append(losses["boxes"].item())
+        loss_all[5].append(losses["cards"].item())
 
         batch_end = time.time() - batch_start
         if _dist_rank() == 0 and i % 100 == 0:
             print(
-                'Epoch: {} / {} Batch: {} / {} || Train total: {:.4f} class: {:.4f} nodes: {:.4f} edges: {:.4f} boxes: {:.4f} cards: {:.4f} take {:.4f} sec.'
-                    .format(epoch_now - 1, max_epoch, i, all_len, losses['total'], losses['class'], losses['nodes'], losses['edges'], losses['boxes'], losses['cards'], batch_end))
+                "Epoch: {} / {} Batch: {} / {} || Train total: {:.4f} class: {:.4f} nodes: {:.4f} edges: {:.4f} boxes: {:.4f} cards: {:.4f} take {:.4f} sec.".format(
+                    epoch_now - 1,
+                    max_epoch,
+                    i,
+                    all_len,
+                    losses["total"],
+                    losses["class"],
+                    losses["nodes"],
+                    losses["edges"],
+                    losses["boxes"],
+                    losses["cards"],
+                    batch_end,
+                )
+            )
         # ===================backward====================
         optimizer.zero_grad()
         # loss = losses['total'] + losses['class'] + losses['nodes'] + losses['edges'] + losses['boxes'] + losses['cards']
@@ -853,7 +949,7 @@ def epoch_train(train_loader, net, loss_function, optimizer,
         #             print(f"NaN detected in '{key}' loss. At {dist.get_rank()} gpu. Name is {detr_ids}")
         #             print(check_grad)
         #             break
-        losses['total'].backward()
+        losses["total"].backward()
 
         # check_grad.append([(name, param.grad) for name, param in net.named_parameters()])
         # check_grad.pop(0)
@@ -906,10 +1002,9 @@ def epoch_val(val_loader, net, config, device, SMD, args):
     # print(len(val_loader))
     loss_all = []
     for i, batchdata in enumerate(val_loader):
-
         # ===================get batch===================
         images, nodes, edges = batchdata[0][0], batchdata[0][1], batchdata[0][2]
-        target = {'nodes': nodes, 'edges': edges}
+        target = {"nodes": nodes, "edges": edges}
         if len(batchdata[0]) > 8 and isinstance(batchdata[0][-2], dict):
             target.update(batchdata[0][-2])
         # images = images.to(device)
@@ -925,7 +1020,20 @@ def epoch_val(val_loader, net, config, device, SMD, args):
                 h.detach(), out, net, config.MODEL.DECODER.OBJ_TOKEN, config.MODEL.DECODER.RLN_TOKEN
             )
         else:
-            if args.use_mst_train:
+            postprocessor_mode = str(
+                getattr(config.TRAIN, "POSTPROCESSOR_MODE", "mst" if args.use_mst_train else "raw")
+            )
+            if postprocessor_mode == "vr-mst":
+                pred_nodes, pred_edges = shared_relation_infer(
+                    h.detach(),
+                    out,
+                    net,
+                    config.MODEL.DECODER.OBJ_TOKEN,
+                    config.MODEL.DECODER.RLN_TOKEN,
+                    mode="vr-mst",
+                    root_penalty=float(getattr(config.TRAIN, "VR_ROOT_PENALTY", 0.0)),
+                )
+            elif args.use_mst_train:
                 pred_nodes, pred_edges = relation_infer_mst(
                     h.detach(), out, net, config.MODEL.DECODER.OBJ_TOKEN, config.MODEL.DECODER.RLN_TOKEN
                 )
@@ -937,8 +1045,7 @@ def epoch_val(val_loader, net, config, device, SMD, args):
             #     h.detach(), out, net, config.MODEL.DECODER.OBJ_TOKEN, config.MODEL.DECODER.RLN_TOKEN
             # )
         # ====================compute losses=====================
-        a = SMD.__call__(node_list=nodes, edge_list=edges,
-                         pred_node_list=pred_nodes, pred_edge_list=pred_edges)
+        a = SMD.__call__(node_list=nodes, edge_list=edges, pred_node_list=pred_nodes, pred_edge_list=pred_edges)
         smd = torch.sum(a)
         loss_all.append(smd.item())
 

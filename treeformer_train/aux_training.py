@@ -100,7 +100,9 @@ def _maybe_stack_images(images: list[torch.Tensor]) -> torch.Tensor | list[torch
     return images
 
 
-def _prepare_aux_batch(batchdata: Any, device: torch.device) -> tuple[torch.Tensor | list[torch.Tensor], dict[str, torch.Tensor]]:
+def _prepare_aux_batch(
+    batchdata: Any, device: torch.device
+) -> tuple[torch.Tensor | list[torch.Tensor], dict[str, torch.Tensor]]:
     batch = batchdata[0]
     non_blocking = device.type == "cuda"
     images = [img.to(device, dtype=torch.float32, non_blocking=non_blocking) for img in batch[0]]
@@ -395,10 +397,7 @@ class _MetricAverager:
             self.weights[key] = self.weights.get(key, 0) + weight
 
     def compute(self) -> dict[str, float]:
-        return {
-            key: value / max(self.weights[key], 1)
-            for key, value in self.sums.items()
-        }
+        return {key: value / max(self.weights[key], 1) for key, value in self.sums.items()}
 
 
 def epoch_train_aux(

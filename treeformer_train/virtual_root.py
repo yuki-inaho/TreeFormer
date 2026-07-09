@@ -54,7 +54,9 @@ def infer_component_id(num_nodes: int, edges: torch.Tensor | np.ndarray | Any) -
             graph.add_edge(int(start), int(end))
 
     component_id = torch.empty((int(num_nodes),), dtype=torch.long)
-    for component_index, nodes in enumerate(sorted(nx.connected_components(graph), key=lambda item: min(item) if item else -1)):
+    for component_index, nodes in enumerate(
+        sorted(nx.connected_components(graph), key=lambda item: min(item) if item else -1)
+    ):
         for node in nodes:
             component_id[int(node)] = int(component_index)
     return component_id
@@ -195,7 +197,9 @@ def compute_virtual_root_forest_edges(
         real_edges=np.asarray(sorted(real_edges), dtype=np.int64).reshape(-1, 2) if real_edges else _empty_edges(),
         root_edges_node_indices=np.asarray(sorted(root_edges), dtype=np.int64),
         component_id=component_id,
-        augmented_edges=np.asarray(sorted(augmented_edges), dtype=np.int64).reshape(-1, 2) if augmented_edges else _empty_edges(),
+        augmented_edges=np.asarray(sorted(augmented_edges), dtype=np.int64).reshape(-1, 2)
+        if augmented_edges
+        else _empty_edges(),
     )
 
 
@@ -241,7 +245,9 @@ def root_mil_loss(
     root_logits = root_logits.reshape(-1)
     component_id = component_id.to(device=root_logits.device, dtype=torch.long).reshape(-1)
     if root_logits.numel() != component_id.numel():
-        raise ValueError(f"root_logits length must match component_id length: {root_logits.numel()} != {component_id.numel()}")
+        raise ValueError(
+            f"root_logits length must match component_id length: {root_logits.numel()} != {component_id.numel()}"
+        )
     if root_logits.numel() == 0:
         return root_logits.sum()
 
