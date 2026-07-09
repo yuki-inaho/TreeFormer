@@ -1,0 +1,4 @@
+# @package _global_
+optimizer:
+  name: adamw_step
+  lr_drop: ${TRAIN.LR_DROP}

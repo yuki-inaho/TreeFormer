@@ -6,6 +6,13 @@ trained_weights/
 runs/
 outputs/
 
+# Local secrets and machine-specific environment
+.env
+.env.*
+!.env.example
+.agents/
+temp/
+
 # Model checkpoints, archives, and training dumps
 *.pkl
 *.pth
@@ -14,6 +21,7 @@ outputs/
 *.tar
 *.tar.gz
 *.tgz
+events.out.tfevents*
 
 # Python environments, caches, and package metadata
 .venv/

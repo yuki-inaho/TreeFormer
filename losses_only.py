@@ -2,7 +2,6 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 import itertools
-import pdb
 import box_ops_2D
 import numpy as np
 from torch.nn import MSELoss
@@ -14,6 +13,10 @@ from scipy.sparse import find
 INFTY_COST = 1e+5
 MIN_TEST = 1e-24
 MAX_TEST = 1 - 1e-4
+
+
+def _unwrap_module(net):
+    return net.module if hasattr(net, "module") else net
 
 
 # def assignment_with_nan(cost_matrix):
@@ -672,7 +675,7 @@ class SetCriterion(nn.Module):
             # tensor([1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
 
             #############################################################################
-            relation_pred = F.relu(self.net.module.relation_embed(relation_feature))
+            relation_pred = F.relu(_unwrap_module(self.net).relation_embed(relation_feature))
             # 30, 2
             #####
             nllloss_func = nn.NLLLoss(reduction='mean')
@@ -703,7 +706,7 @@ class SetCriterion(nn.Module):
             # 比如第一组 输出(0.05, 0.95)第五组输出(0.99,0.01)
         except Exception as e:
             print(e)
-            pdb.set_trace()
+            raise
 
         return loss / h.shape[0]
 
@@ -988,7 +991,7 @@ class SetCriterion(nn.Module):
             edge_labels = torch.cat(edge_labels, 0).to(h.get_device())
             # tensor([1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
             #############################################################################
-            relation_pred = self.net.module.relation_embed(relation_feature)
+            relation_pred = _unwrap_module(self.net).relation_embed(relation_feature)
             # 30, 2
             #####
             relation_pred_softmax_batch = F.softmax(relation_pred, dim=-1)
@@ -1018,7 +1021,7 @@ class SetCriterion(nn.Module):
             # 比如第一组 输出(0.05, 0.95)第五组输出(0.99,0.01)
         except Exception as e:
             print(e)
-            pdb.set_trace()
+            raise
 
         return loss / h.shape[0]
 
@@ -1309,7 +1312,7 @@ class SetCriterion(nn.Module):
             edge_labels = torch.cat(edge_labels, 0).to(h.get_device())
             # tensor([1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
             #############################################################################
-            relation_pred = self.net.module.relation_embed(relation_feature)
+            relation_pred = _unwrap_module(self.net).relation_embed(relation_feature)
             # 30, 2
             #####
             relation_pred_softmax_batch = F.softmax(relation_pred, dim=-1)
@@ -1339,7 +1342,7 @@ class SetCriterion(nn.Module):
             # 比如第一组 输出(0.05, 0.95)第五组输出(0.99,0.01)
         except Exception as e:
             print(e)
-            pdb.set_trace()
+            raise
 
         return loss / h.shape[0], shuffle_pos_lst, shuffle_neg_lst
 
@@ -1621,7 +1624,7 @@ class SetCriterion(nn.Module):
             # tensor([1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
 
             #############################################################################
-            relation_pred = self.net.module.relation_embed(relation_feature)
+            relation_pred = _unwrap_module(self.net).relation_embed(relation_feature)
             # 30, 2
             #####
             relation_pred_softmax_batch = F.softmax(relation_pred, dim=-1)
@@ -1651,7 +1654,7 @@ class SetCriterion(nn.Module):
             # 比如第一组 输出(0.05, 0.95)第五组输出(0.99,0.01)
         except Exception as e:
             print(e)
-            pdb.set_trace()
+            raise
 
         return 6 * loss / h.shape[0]
 
@@ -1924,7 +1927,7 @@ class SetCriterion(nn.Module):
             # tensor([1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
 
             #############################################################################
-            relation_pred = self.net.module.relation_embed(relation_feature)
+            relation_pred = _unwrap_module(self.net).relation_embed(relation_feature)
             # 30, 2
             #####
             nllloss_func = nn.NLLLoss(reduction='mean')
@@ -1955,7 +1958,7 @@ class SetCriterion(nn.Module):
             # 比如第一组 输出(0.05, 0.95)第五组输出(0.99,0.01)
         except Exception as e:
             print(e)
-            pdb.set_trace()
+            raise
 
         return 2 * loss / h.shape[0]
 
@@ -2221,7 +2224,7 @@ class SetCriterion(nn.Module):
                     relation_feature_batch = torch.cat((rearranged_object_token[all_edges_[:, 0], :],
                                                         rearranged_object_token[all_edges_[:, 1], :],
                                                         relation_token[batch_id, ...].repeat(total_edge, 1)), 1).clone()
-                    relation_pred_batch = self.net.module.relation_embed(relation_feature_batch)
+                    relation_pred_batch = _unwrap_module(self.net).relation_embed(relation_feature_batch)
 
                     ###########################################################################
                     relation_pred_softmax_batch = F.softmax(relation_pred_batch, dim=-1).detach().cpu()
@@ -2286,7 +2289,7 @@ class SetCriterion(nn.Module):
                 else:
                     relation_feature_batch = torch.cat(
                         (rearranged_object_token[all_edges_[:, 0], :], rearranged_object_token[all_edges_[:, 1], :]), 1)
-                    relation_pred_batch = self.net.module.relation_embed(relation_feature_batch)
+                    relation_pred_batch = _unwrap_module(self.net).relation_embed(relation_feature_batch)
                     # relation_pred_softmax_batch = torch.softmax(relation_pred_batch, dim=-1)
                     # relation_pred_softmax_batch = relation_pred_batch.clone().detach().softmax(-1)
                     relation_pred_softmax_batch = F.softmax(relation_pred_batch, dim=-1).detach().cpu()
@@ -2355,7 +2358,7 @@ class SetCriterion(nn.Module):
             # # 比如第一组 输出(0.05, 0.95)第五组输出(0.99,0.01)
         except Exception as e:
             print(e)
-            pdb.set_trace()
+            raise
 
         return loss / h.shape[0]
 
@@ -2565,7 +2568,7 @@ class SetCriterion(nn.Module):
                     relation_feature_batch = torch.cat((rearranged_object_token[all_edges_[:, 0], :],
                                                         rearranged_object_token[all_edges_[:, 1], :],
                                                         relation_token[batch_id, ...].repeat(total_edge, 1)), 1).clone()
-                    relation_pred_batch = self.net.module.relation_embed(relation_feature_batch)
+                    relation_pred_batch = _unwrap_module(self.net).relation_embed(relation_feature_batch)
 
                     ###########################################################################
                     relation_pred_batch_fake = F.relu(relation_pred_batch).detach().cpu()
@@ -2751,7 +2754,7 @@ class SetCriterion(nn.Module):
                 else:
                     relation_feature_batch = torch.cat(
                         (rearranged_object_token[all_edges_[:, 0], :], rearranged_object_token[all_edges_[:, 1], :]), 1)
-                    relation_pred_batch = self.net.module.relation_embed(relation_feature_batch)
+                    relation_pred_batch = _unwrap_module(self.net).relation_embed(relation_feature_batch)
                     # relation_pred_softmax_batch = torch.softmax(relation_pred_batch, dim=-1)
                     # relation_pred_softmax_batch = relation_pred_batch.clone().detach().softmax(-1)
                     relation_pred_softmax_batch = F.softmax(relation_pred_batch, dim=-1).detach().cpu()
@@ -2803,7 +2806,7 @@ class SetCriterion(nn.Module):
 
         except Exception as e:
             print(e)
-            pdb.set_trace()
+            raise
 
         return loss / h.shape[0]
 
@@ -3013,7 +3016,7 @@ class SetCriterion(nn.Module):
                     relation_feature_batch = torch.cat((rearranged_object_token[all_edges_[:, 0], :],
                                                         rearranged_object_token[all_edges_[:, 1], :],
                                                         relation_token[batch_id, ...].repeat(total_edge, 1)), 1).clone()
-                    relation_pred_batch = self.net.module.relation_embed(relation_feature_batch)
+                    relation_pred_batch = _unwrap_module(self.net).relation_embed(relation_feature_batch)
 
                     ###########################################################################
                     relation_pred_batch_fake = F.relu(relation_pred_batch).detach().cpu()
@@ -3202,7 +3205,7 @@ class SetCriterion(nn.Module):
                 else:
                     relation_feature_batch = torch.cat(
                         (rearranged_object_token[all_edges_[:, 0], :], rearranged_object_token[all_edges_[:, 1], :]), 1)
-                    relation_pred_batch = self.net.module.relation_embed(relation_feature_batch)
+                    relation_pred_batch = _unwrap_module(self.net).relation_embed(relation_feature_batch)
                     # relation_pred_softmax_batch = torch.softmax(relation_pred_batch, dim=-1)
                     # relation_pred_softmax_batch = relation_pred_batch.clone().detach().softmax(-1)
                     relation_pred_softmax_batch = F.softmax(relation_pred_batch, dim=-1).detach().cpu()
@@ -3254,7 +3257,7 @@ class SetCriterion(nn.Module):
 
         except Exception as e:
             print(e)
-            pdb.set_trace()
+            raise
 
         return loss / h.shape[0]
 
@@ -3464,7 +3467,7 @@ class SetCriterion(nn.Module):
                     relation_feature_batch = torch.cat((rearranged_object_token[all_edges_[:, 0], :],
                                                         rearranged_object_token[all_edges_[:, 1], :],
                                                         relation_token[batch_id, ...].repeat(total_edge, 1)), 1).clone()
-                    relation_pred_batch = self.net.module.relation_embed(relation_feature_batch)
+                    relation_pred_batch = _unwrap_module(self.net).relation_embed(relation_feature_batch)
 
                     ###########################################################################
                     relation_pred_batch_fake = F.relu(relation_pred_batch).detach().cpu()
@@ -3653,7 +3656,7 @@ class SetCriterion(nn.Module):
                 else:
                     relation_feature_batch = torch.cat(
                         (rearranged_object_token[all_edges_[:, 0], :], rearranged_object_token[all_edges_[:, 1], :]), 1)
-                    relation_pred_batch = self.net.module.relation_embed(relation_feature_batch)
+                    relation_pred_batch = _unwrap_module(self.net).relation_embed(relation_feature_batch)
                     # relation_pred_softmax_batch = torch.softmax(relation_pred_batch, dim=-1)
                     # relation_pred_softmax_batch = relation_pred_batch.clone().detach().softmax(-1)
                     relation_pred_softmax_batch = F.softmax(relation_pred_batch, dim=-1).detach().cpu()
@@ -3705,7 +3708,7 @@ class SetCriterion(nn.Module):
 
         except Exception as e:
             print(e)
-            pdb.set_trace()
+            raise
 
         return loss / h.shape[0]
 
@@ -3915,7 +3918,7 @@ class SetCriterion(nn.Module):
                     relation_feature_batch = torch.cat((rearranged_object_token[all_edges_[:, 0], :],
                                                         rearranged_object_token[all_edges_[:, 1], :],
                                                         relation_token[batch_id, ...].repeat(total_edge, 1)), 1).clone()
-                    relation_pred_batch = self.net.module.relation_embed(relation_feature_batch)
+                    relation_pred_batch = _unwrap_module(self.net).relation_embed(relation_feature_batch)
 
                     ###########################################################################
                     relation_pred_batch_fake = F.relu(relation_pred_batch).detach().cpu()
@@ -3996,7 +3999,7 @@ class SetCriterion(nn.Module):
                 else:
                     relation_feature_batch = torch.cat(
                         (rearranged_object_token[all_edges_[:, 0], :], rearranged_object_token[all_edges_[:, 1], :]), 1)
-                    relation_pred_batch = self.net.module.relation_embed(relation_feature_batch)
+                    relation_pred_batch = _unwrap_module(self.net).relation_embed(relation_feature_batch)
                     # relation_pred_softmax_batch = torch.softmax(relation_pred_batch, dim=-1)
                     # relation_pred_softmax_batch = relation_pred_batch.clone().detach().softmax(-1)
                     relation_pred_softmax_batch = F.softmax(relation_pred_batch, dim=-1).detach().cpu()
@@ -4048,7 +4051,7 @@ class SetCriterion(nn.Module):
 
         except Exception as e:
             print(e)
-            pdb.set_trace()
+            raise
 
         return loss / h.shape[0]
 
@@ -4262,7 +4265,7 @@ class SetCriterion(nn.Module):
                     relation_feature_batch = torch.cat((rearranged_object_token[all_edges_[:, 0], :],
                                                         rearranged_object_token[all_edges_[:, 1], :],
                                                         relation_token[batch_id, ...].repeat(total_edge, 1)), 1).clone()
-                    relation_pred_batch = self.net.module.relation_embed(relation_feature_batch)
+                    relation_pred_batch = _unwrap_module(self.net).relation_embed(relation_feature_batch)
 
                     ###########################################################################
                     relation_pred_batch_fake = F.relu(relation_pred_batch).detach().cpu()
@@ -4346,7 +4349,7 @@ class SetCriterion(nn.Module):
                 else:
                     relation_feature_batch = torch.cat(
                         (rearranged_object_token[all_edges_[:, 0], :], rearranged_object_token[all_edges_[:, 1], :]), 1)
-                    relation_pred_batch = self.net.module.relation_embed(relation_feature_batch)
+                    relation_pred_batch = _unwrap_module(self.net).relation_embed(relation_feature_batch)
                     # relation_pred_softmax_batch = torch.softmax(relation_pred_batch, dim=-1)
                     # relation_pred_softmax_batch = relation_pred_batch.clone().detach().softmax(-1)
                     relation_pred_softmax_batch = F.softmax(relation_pred_batch, dim=-1).detach().cpu()
@@ -4398,7 +4401,7 @@ class SetCriterion(nn.Module):
 
         except Exception as e:
             print(e)
-            pdb.set_trace()
+            raise
 
         loss_constrained = loss / h.shape[0]
         return loss_unconstrained + loss_constrained
@@ -4513,7 +4516,7 @@ class SetCriterion(nn.Module):
                     relation_feature_batch = torch.cat((rearranged_object_token[all_edges_[:, 0], :],
                                                         rearranged_object_token[all_edges_[:, 1], :],
                                                         relation_token[batch_id, ...].repeat(total_edge, 1)), 1).clone()
-                    relation_pred_batch = self.net.module.relation_embed(relation_feature_batch)
+                    relation_pred_batch = _unwrap_module(self.net).relation_embed(relation_feature_batch)
 
                     ####################################################################################################
                     # 在假的中取得成果
@@ -4600,7 +4603,7 @@ class SetCriterion(nn.Module):
                 else:
                     relation_feature_batch = torch.cat(
                         (rearranged_object_token[all_edges_[:, 0], :], rearranged_object_token[all_edges_[:, 1], :]), 1)
-                    relation_pred_batch = self.net.module.relation_embed(relation_feature_batch)
+                    relation_pred_batch = _unwrap_module(self.net).relation_embed(relation_feature_batch)
                     # relation_pred_softmax_batch = torch.softmax(relation_pred_batch, dim=-1)
                     # relation_pred_softmax_batch = relation_pred_batch.clone().detach().softmax(-1)
                     relation_pred_softmax_batch = F.softmax(relation_pred_batch, dim=-1).detach().cpu()
@@ -4646,7 +4649,7 @@ class SetCriterion(nn.Module):
 
         except Exception as e:
             print(e)
-            pdb.set_trace()
+            raise
         loss_constrained = loss / h.shape[0]
         return loss_unconstrained + loss_constrained
     def loss_edges_final_final_GPU(self, h, target_nodes, target_edges, indices, epoch,
@@ -4759,7 +4762,7 @@ class SetCriterion(nn.Module):
                     relation_feature_batch = torch.cat((rearranged_object_token[all_edges_[:, 0], :],
                                                         rearranged_object_token[all_edges_[:, 1], :],
                                                         relation_token[batch_id, ...].repeat(total_edge, 1)), 1).clone()
-                    relation_pred_batch = self.net.module.relation_embed(relation_feature_batch)
+                    relation_pred_batch = _unwrap_module(self.net).relation_embed(relation_feature_batch)
 
                     ####################################################################################################
                     # 在假的中取得成果
@@ -4851,7 +4854,7 @@ class SetCriterion(nn.Module):
                 else:
                     relation_feature_batch = torch.cat(
                         (rearranged_object_token[all_edges_[:, 0], :], rearranged_object_token[all_edges_[:, 1], :]), 1)
-                    relation_pred_batch = self.net.module.relation_embed(relation_feature_batch)
+                    relation_pred_batch = _unwrap_module(self.net).relation_embed(relation_feature_batch)
                     # relation_pred_softmax_batch = torch.softmax(relation_pred_batch, dim=-1)
                     # relation_pred_softmax_batch = relation_pred_batch.clone().detach().softmax(-1)
                     relation_pred_softmax_batch = F.softmax(relation_pred_batch, dim=-1).detach().cpu()
@@ -4897,7 +4900,7 @@ class SetCriterion(nn.Module):
 
         except Exception as e:
             print(e)
-            pdb.set_trace()
+            raise
         loss_constrained = loss / h.shape[0]
         return loss_unconstrained + loss_constrained
 
@@ -5013,7 +5016,7 @@ class SetCriterion(nn.Module):
                         relation_feature_batch = torch.cat((rearranged_object_token[all_edges_[:, 0], :],
                                                             rearranged_object_token[all_edges_[:, 1], :],
                                                             relation_token[batch_id, ...].repeat(total_edge, 1)), 1).clone()
-                        relation_pred_batch = self.net.module.relation_embed(relation_feature_batch)
+                        relation_pred_batch = _unwrap_module(self.net).relation_embed(relation_feature_batch)
 
                         ####################################################################################################
                         # 在假的中取得成果
@@ -5110,7 +5113,7 @@ class SetCriterion(nn.Module):
                     else:
                         relation_feature_batch = torch.cat(
                             (rearranged_object_token[all_edges_[:, 0], :], rearranged_object_token[all_edges_[:, 1], :]), 1)
-                        relation_pred_batch = self.net.module.relation_embed(relation_feature_batch)
+                        relation_pred_batch = _unwrap_module(self.net).relation_embed(relation_feature_batch)
                         # relation_pred_softmax_batch = torch.softmax(relation_pred_batch, dim=-1)
                         # relation_pred_softmax_batch = relation_pred_batch.clone().detach().softmax(-1)
                         relation_pred_softmax_batch = F.softmax(relation_pred_batch, dim=-1).detach().cpu()
@@ -5156,7 +5159,7 @@ class SetCriterion(nn.Module):
 
             except Exception as e:
                 print(e)
-                pdb.set_trace()
+                raise
             loss_constrained = loss / h.shape[0]
             return loss_unconstrained + loss_constrained
         else:
@@ -5273,7 +5276,7 @@ class SetCriterion(nn.Module):
                     relation_feature_batch = torch.cat((rearranged_object_token[all_edges_[:, 0], :],
                                                         rearranged_object_token[all_edges_[:, 1], :],
                                                         relation_token[batch_id, ...].repeat(total_edge, 1)), 1).clone()
-                    relation_pred_batch = self.net.module.relation_embed(relation_feature_batch)
+                    relation_pred_batch = _unwrap_module(self.net).relation_embed(relation_feature_batch)
 
                     ####################################################################################################
                     # 在假的中取得成果
@@ -5387,7 +5390,7 @@ class SetCriterion(nn.Module):
                 else:
                     relation_feature_batch = torch.cat(
                         (rearranged_object_token[all_edges_[:, 0], :], rearranged_object_token[all_edges_[:, 1], :]), 1)
-                    relation_pred_batch = self.net.module.relation_embed(relation_feature_batch)
+                    relation_pred_batch = _unwrap_module(self.net).relation_embed(relation_feature_batch)
                     # relation_pred_softmax_batch = torch.softmax(relation_pred_batch, dim=-1)
                     # relation_pred_softmax_batch = relation_pred_batch.clone().detach().softmax(-1)
                     relation_pred_softmax_batch = F.softmax(relation_pred_batch, dim=-1).detach().cpu()
@@ -5433,7 +5436,7 @@ class SetCriterion(nn.Module):
 
         except Exception as e:
             print(e)
-            pdb.set_trace()
+            raise
         loss_constrained = loss / h.shape[0]
         # print("un   cons: ", loss_unconstrained, loss_constrained)
         return loss_unconstrained + loss_constrained
@@ -5548,7 +5551,7 @@ class SetCriterion(nn.Module):
                     relation_feature_batch = torch.cat((rearranged_object_token[all_edges_[:, 0], :],
                                                         rearranged_object_token[all_edges_[:, 1], :],
                                                         relation_token[batch_id, ...].repeat(total_edge, 1)), 1).clone()
-                    relation_pred_batch = self.net.module.relation_embed(relation_feature_batch)
+                    relation_pred_batch = _unwrap_module(self.net).relation_embed(relation_feature_batch)
 
                     ####################################################################################################
                     # 在假的中取得成果
@@ -5646,7 +5649,7 @@ class SetCriterion(nn.Module):
                 else:
                     relation_feature_batch = torch.cat(
                         (rearranged_object_token[all_edges_[:, 0], :], rearranged_object_token[all_edges_[:, 1], :]), 1)
-                    relation_pred_batch = self.net.module.relation_embed(relation_feature_batch)
+                    relation_pred_batch = _unwrap_module(self.net).relation_embed(relation_feature_batch)
                     # relation_pred_softmax_batch = torch.softmax(relation_pred_batch, dim=-1)
                     # relation_pred_softmax_batch = relation_pred_batch.clone().detach().softmax(-1)
                     relation_pred_softmax_batch = F.softmax(relation_pred_batch, dim=-1).detach().cpu()
@@ -5692,7 +5695,7 @@ class SetCriterion(nn.Module):
 
         except Exception as e:
             print(e)
-            pdb.set_trace()
+            raise
         loss_constrained = loss / h.shape[0]
         # print("un   cons: ", loss_unconstrained, loss_constrained)
         return loss_unconstrained + 5 * loss_constrained
@@ -5815,7 +5818,7 @@ class SetCriterion(nn.Module):
                     relation_feature_batch = torch.cat((rearranged_object_token[all_edges_[:, 0], :],
                                                         rearranged_object_token[all_edges_[:, 1], :],
                                                         relation_token[batch_id, ...].repeat(total_edge, 1)), 1).clone()
-                    relation_pred_batch = self.net.module.relation_embed(relation_feature_batch)
+                    relation_pred_batch = _unwrap_module(self.net).relation_embed(relation_feature_batch)
 
                     ####################################################################################################
                     # 在假的中取得成果
@@ -5922,7 +5925,7 @@ class SetCriterion(nn.Module):
                 else:
                     relation_feature_batch = torch.cat(
                         (rearranged_object_token[all_edges_[:, 0], :], rearranged_object_token[all_edges_[:, 1], :]), 1)
-                    relation_pred_batch = self.net.module.relation_embed(relation_feature_batch)
+                    relation_pred_batch = _unwrap_module(self.net).relation_embed(relation_feature_batch)
                     # relation_pred_softmax_batch = torch.softmax(relation_pred_batch, dim=-1)
                     # relation_pred_softmax_batch = relation_pred_batch.clone().detach().softmax(-1)
                     relation_pred_softmax_batch = F.softmax(relation_pred_batch, dim=-1).detach().cpu()
@@ -5968,7 +5971,7 @@ class SetCriterion(nn.Module):
 
         except Exception as e:
             print(e)
-            pdb.set_trace()
+            raise
         loss_constrained = loss / h.shape[0]
         # print("un   cons: ", loss_unconstrained, loss_constrained)
         return 1 * loss_unconstrained + 5 * loss_constrained
@@ -6094,7 +6097,7 @@ class SetCriterion(nn.Module):
                     relation_feature_batch = torch.cat((rearranged_object_token[all_edges_[:, 0], :],
                                                         rearranged_object_token[all_edges_[:, 1], :],
                                                         relation_token[batch_id, ...].view(1, -1).repeat(total_edge, 1)), 1).clone()
-                    relation_pred_batch = self.net.module.relation_embed(relation_feature_batch)
+                    relation_pred_batch = _unwrap_module(self.net).relation_embed(relation_feature_batch)
 
                     ####################################################################################################
                     # 在假的中取得成果
@@ -6201,7 +6204,7 @@ class SetCriterion(nn.Module):
                 else:
                     relation_feature_batch = torch.cat(
                         (rearranged_object_token[all_edges_[:, 0], :], rearranged_object_token[all_edges_[:, 1], :]), 1)
-                    relation_pred_batch = self.net.module.relation_embed(relation_feature_batch)
+                    relation_pred_batch = _unwrap_module(self.net).relation_embed(relation_feature_batch)
                     # relation_pred_softmax_batch = torch.softmax(relation_pred_batch, dim=-1)
                     # relation_pred_softmax_batch = relation_pred_batch.clone().detach().softmax(-1)
                     relation_pred_softmax_batch = F.softmax(relation_pred_batch, dim=-1).detach().cpu()
@@ -6247,7 +6250,7 @@ class SetCriterion(nn.Module):
 
         except Exception as e:
             print(e)
-            pdb.set_trace()
+            raise
         loss_constrained = loss / h.shape[0]
         # print("un   cons: ", loss_unconstrained, loss_constrained)
         return 3 * loss_unconstrained + 3 * loss_constrained
@@ -6380,7 +6383,7 @@ class SetCriterion(nn.Module):
                     relation_feature_batch = torch.cat((rearranged_object_token[all_edges_[:, 0], :],
                                                         rearranged_object_token[all_edges_[:, 1], :],
                                                         relation_token[batch_id, ...].view(1, -1).repeat(total_edge, 1)), 1).clone()
-                    relation_pred_batch = self.net.module.relation_embed(relation_feature_batch)
+                    relation_pred_batch = _unwrap_module(self.net).relation_embed(relation_feature_batch)
 
                     ####################################################################################################
                     # 在假的中取得成果
@@ -6489,7 +6492,7 @@ class SetCriterion(nn.Module):
                 else:
                     relation_feature_batch = torch.cat(
                         (rearranged_object_token[all_edges_[:, 0], :], rearranged_object_token[all_edges_[:, 1], :]), 1)
-                    relation_pred_batch = self.net.module.relation_embed(relation_feature_batch)
+                    relation_pred_batch = _unwrap_module(self.net).relation_embed(relation_feature_batch)
                     # relation_pred_softmax_batch = torch.softmax(relation_pred_batch, dim=-1)
                     # relation_pred_softmax_batch = relation_pred_batch.clone().detach().softmax(-1)
                     relation_pred_softmax_batch = F.softmax(relation_pred_batch, dim=-1).detach().cpu()
@@ -6535,7 +6538,7 @@ class SetCriterion(nn.Module):
 
         except Exception as e:
             print(e)
-            pdb.set_trace()
+            raise
         loss_constrained = loss / h.shape[0]
         # print("un   cons: ", loss_unconstrained, loss_constrained)
         return 3 * loss_unconstrained + 3 * loss_constrained
@@ -6653,7 +6656,7 @@ class SetCriterion(nn.Module):
                     relation_feature_batch = torch.cat((rearranged_object_token[all_edges_[:, 0], :],
                                                         rearranged_object_token[all_edges_[:, 1], :],
                                                         relation_token[batch_id, ...].view(1, -1).repeat(total_edge, 1)), 1).clone()
-                    relation_pred_batch = self.net.module.relation_embed(relation_feature_batch)
+                    relation_pred_batch = _unwrap_module(self.net).relation_embed(relation_feature_batch)
 
                     ####################################################################################################
                     # 在假的中取得成果
@@ -6750,7 +6753,7 @@ class SetCriterion(nn.Module):
                 else:
                     relation_feature_batch = torch.cat(
                         (rearranged_object_token[all_edges_[:, 0], :], rearranged_object_token[all_edges_[:, 1], :]), 1)
-                    relation_pred_batch = self.net.module.relation_embed(relation_feature_batch)
+                    relation_pred_batch = _unwrap_module(self.net).relation_embed(relation_feature_batch)
                     # relation_pred_softmax_batch = torch.softmax(relation_pred_batch, dim=-1)
                     # relation_pred_softmax_batch = relation_pred_batch.clone().detach().softmax(-1)
                     relation_pred_softmax_batch = F.softmax(relation_pred_batch, dim=-1).detach().cpu()
@@ -6796,7 +6799,7 @@ class SetCriterion(nn.Module):
 
         except Exception as e:
             print(e)
-            pdb.set_trace()
+            raise
         loss_constrained = loss / h.shape[0]
         # print("un   cons: ", loss_unconstrained, loss_constrained)
         return 3 * loss_unconstrained + 3 * loss_constrained
@@ -6916,7 +6919,7 @@ class SetCriterion(nn.Module):
                     relation_feature_batch = torch.cat((rearranged_object_token[all_edges_[:, 0], :],
                                                         rearranged_object_token[all_edges_[:, 1], :],
                                                         relation_token[batch_id, ...].view(1, -1).repeat(total_edge, 1)), 1).clone()
-                    relation_pred_batch = self.net.module.relation_embed(relation_feature_batch)
+                    relation_pred_batch = _unwrap_module(self.net).relation_embed(relation_feature_batch)
 
                     ####################################################################################################
                     # 在假的中取得成果
@@ -7013,7 +7016,7 @@ class SetCriterion(nn.Module):
                 else:
                     relation_feature_batch = torch.cat(
                         (rearranged_object_token[all_edges_[:, 0], :], rearranged_object_token[all_edges_[:, 1], :]), 1)
-                    relation_pred_batch = self.net.module.relation_embed(relation_feature_batch)
+                    relation_pred_batch = _unwrap_module(self.net).relation_embed(relation_feature_batch)
                     # relation_pred_softmax_batch = torch.softmax(relation_pred_batch, dim=-1)
                     # relation_pred_softmax_batch = relation_pred_batch.clone().detach().softmax(-1)
                     relation_pred_softmax_batch = F.softmax(relation_pred_batch, dim=-1).detach().cpu()
@@ -7059,7 +7062,7 @@ class SetCriterion(nn.Module):
 
         except Exception as e:
             print(e)
-            pdb.set_trace()
+            raise
         loss_constrained = loss / h.shape[0]
         # print("un   cons: ", loss_unconstrained, loss_constrained)
         return 3 * loss_unconstrained + 3 * loss_constrained
@@ -7182,7 +7185,7 @@ class SetCriterion(nn.Module):
                     relation_feature_batch = torch.cat((rearranged_object_token[all_edges_[:, 0], :],
                                                         rearranged_object_token[all_edges_[:, 1], :],
                                                         relation_token[batch_id, ...].repeat(total_edge, 1)), 1).clone()
-                    relation_pred_batch = self.net.module.relation_embed(relation_feature_batch)
+                    relation_pred_batch = _unwrap_module(self.net).relation_embed(relation_feature_batch)
 
                     ####################################################################################################
                     # 在假的中取得成果
@@ -7291,7 +7294,7 @@ class SetCriterion(nn.Module):
                 else:
                     relation_feature_batch = torch.cat(
                         (rearranged_object_token[all_edges_[:, 0], :], rearranged_object_token[all_edges_[:, 1], :]), 1)
-                    relation_pred_batch = self.net.module.relation_embed(relation_feature_batch)
+                    relation_pred_batch = _unwrap_module(self.net).relation_embed(relation_feature_batch)
                     # relation_pred_softmax_batch = torch.softmax(relation_pred_batch, dim=-1)
                     # relation_pred_softmax_batch = relation_pred_batch.clone().detach().softmax(-1)
                     relation_pred_softmax_batch = F.softmax(relation_pred_batch, dim=-1).detach().cpu()
@@ -7337,7 +7340,7 @@ class SetCriterion(nn.Module):
 
         except Exception as e:
             print(e)
-            pdb.set_trace()
+            raise
         loss_constrained = loss / h.shape[0]
         # print("un   cons: ", loss_unconstrained, loss_constrained)
         return 1 * loss_unconstrained + 1 * loss_constrained
@@ -7490,11 +7493,11 @@ class SetCriterion(nn.Module):
                     relation_feature = torch.cat([rearranged_object_token,  # 6 256 + 1 256 *6
                                                   relation_token[batch_id, ...].repeat(rearranged_object_token.shape[0],
                                                                                        1)], 1)
-                    z_train = self.net.module.GAE_model.encode((relation_feature), all_full_adj)  # 6 * 512 >> 6*256
-                    gala_out = self.net.module.gala_model(z_train, all_full_adj)  # 6 256 >> 6 2(x, y)
+                    z_train = _unwrap_module(self.net).GAE_model.encode((relation_feature), all_full_adj)  # 6 * 512 >> 6*256
+                    gala_out = _unwrap_module(self.net).gala_model(z_train, all_full_adj)  # 6 256 >> 6 2(x, y)
                     gala_loss_type = MSELoss(reduction='mean')
                     gala_loss = gala_loss_type(n, gala_out)
-                    train_loss = self.net.module.GAE_model.recon_loss(z_train, pos_edge_1, neg_edges)  # 2 4488
+                    train_loss = _unwrap_module(self.net).GAE_model.recon_loss(z_train, pos_edge_1, neg_edges)  # 2 4488
 
                     loss = loss + gala_loss + train_loss
 
@@ -7502,16 +7505,16 @@ class SetCriterion(nn.Module):
 
                 else:
                     relation_feature = rearranged_object_token
-                    z_train = self.net.module.GAE_model.encode((relation_feature), all_full_adj)  # 6 * 512 >> 6*256
-                    gala_out = self.net.module.gala_model(z_train, all_full_adj)  # 6 256 >> 6 2(x, y)
+                    z_train = _unwrap_module(self.net).GAE_model.encode((relation_feature), all_full_adj)  # 6 * 512 >> 6*256
+                    gala_out = _unwrap_module(self.net).gala_model(z_train, all_full_adj)  # 6 256 >> 6 2(x, y)
                     gala_loss_type = MSELoss(reduction='mean')
                     gala_loss = gala_loss_type(n, gala_out)
-                    train_loss = self.net.module.GAE_model.recon_loss(z_train, pos_edge_1, neg_edges)  # 2 4488
+                    train_loss = _unwrap_module(self.net).GAE_model.recon_loss(z_train, pos_edge_1, neg_edges)  # 2 4488
                     loss = loss + gala_loss + train_loss
 
         except Exception as e:
             print(e)
-            pdb.set_trace()
+            raise
 
         # print(loss.device)
         # print(torch.isnan(loss).sum())
@@ -7671,8 +7674,8 @@ class SetCriterion(nn.Module):
                     relation_feature = torch.cat([rearranged_object_token,  # 6 256 + 1 256 *6
                                                   relation_token[batch_id, ...].repeat(rearranged_object_token.shape[0],
                                                                                        1)], 1)
-                    z_train = self.net.module.GAE_model.encode((relation_feature), all_full_adj)  # 6 * 512 >> 6*256
-                    gala_out = self.net.module.gala_model(z_train, all_full_adj)  # 6 256 >> 6 2(x, y)
+                    z_train = _unwrap_module(self.net).GAE_model.encode((relation_feature), all_full_adj)  # 6 * 512 >> 6*256
+                    gala_out = _unwrap_module(self.net).gala_model(z_train, all_full_adj)  # 6 256 >> 6 2(x, y)
                     gala_loss_type = MSELoss(reduction='mean')
                     gala_loss = gala_loss_type(n, gala_out)
                     # print(1111111111111111111111)
@@ -7682,7 +7685,7 @@ class SetCriterion(nn.Module):
                     # print(z_train)
                     # print(pos_edge_1)
                     # print(neg_edges)
-                    link_logits, link_labels = self.net.module.GAE_model.recon_label_logits(z_train, pos_edge_1,
+                    link_logits, link_labels = _unwrap_module(self.net).GAE_model.recon_label_logits(z_train, pos_edge_1,
                                                                                             neg_edges.to(
                                                                                                 h.device))  # 2 4488
                     ###########################################################################
@@ -7725,11 +7728,11 @@ class SetCriterion(nn.Module):
 
                 else:
                     relation_feature = rearranged_object_token
-                    z_train = self.net.module.GAE_model.encode((relation_feature), all_full_adj)  # 6 * 512 >> 6*256
-                    gala_out = self.net.module.gala_model(z_train, all_full_adj)  # 6 256 >> 6 2(x, y)
+                    z_train = _unwrap_module(self.net).GAE_model.encode((relation_feature), all_full_adj)  # 6 * 512 >> 6*256
+                    gala_out = _unwrap_module(self.net).gala_model(z_train, all_full_adj)  # 6 256 >> 6 2(x, y)
                     gala_loss_type = MSELoss(reduction='mean')
                     gala_loss = gala_loss_type(n, gala_out)
-                    link_logits, link_labels = self.net.module.GAE_model.recon_label_logits(z_train, pos_edge_1,
+                    link_logits, link_labels = _unwrap_module(self.net).GAE_model.recon_label_logits(z_train, pos_edge_1,
                                                                                             neg_edges)  # 2 4488
                     ###########################################################################
                     cost_pred_batch = 1 - link_logits.detach().cpu()
@@ -7760,7 +7763,7 @@ class SetCriterion(nn.Module):
 
         except Exception as e:
             print(e)
-            pdb.set_trace()
+            raise
 
         # print(loss.device)
         # print(torch.isnan(loss).sum())

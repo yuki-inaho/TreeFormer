@@ -1,0 +1,20 @@
+# @package _global_
+TRAIN:
+  EPOCHS: 1
+  LR: 1e-4
+  LR_BACKBONE: 3e-5
+  WEIGHT_DECAY: 1e-4
+  LR_DROP: 100
+  CLIP_MAX_NORM: 20.0
+  SAVE_PATH: ${oc.env:TREEFORMER_TRAIN_OUTPUT,${oc.env:TREEFORMER_ASSETS_ROOT,../TreeFormer_assets}/trained_weights_hydra}
+  VAL_INTERVAL: 1
+  SAVE_VAL: false
+  LOSSES: ["boxes", "class", "cards", "nodes", "edges"]
+  W_BBOX: 2.0
+  W_CLASS: 3.0
+  W_CARD: 1.0
+  W_NODE: 5.0
+  W_EDGE: 4.0
+log:
+  exp_name: hydra_guyot_smoke
+  message: Hydra-managed TreeFormer Guyot training

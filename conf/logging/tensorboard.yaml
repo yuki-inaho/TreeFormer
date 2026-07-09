@@ -1,0 +1,5 @@
+# @package _global_
+tensorboard:
+  enabled: true
+  flush_secs: 30
+  log_dir: ${runtime.output_dir}/tensorboard

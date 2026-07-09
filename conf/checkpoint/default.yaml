@@ -1,0 +1,13 @@
+# @package _global_
+checkpoint:
+  enabled: true
+  dir: ${runtime.output_dir}/checkpoints
+  metric_name: val/smd
+  mode: min
+  save_last: true
+  save_best: true
+  save_every: 0
+  resume: null
+  pretrained: null
+  pretrained_key: net
+  pretrained_strict: true

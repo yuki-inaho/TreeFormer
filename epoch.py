@@ -2,11 +2,19 @@ import torch
 import torch.nn.functional as F
 from torchvision.ops import batched_nms
 import itertools
+import time
 import torch.distributed as dist
-import torch.autograd as autograd
 
 import networkx as nx
 import numpy as np
+
+def _dist_rank():
+    if not dist.is_available() or not dist.is_initialized():
+        return 0
+    return dist.get_rank()
+
+def _unwrap_module(net):
+    return net.module if hasattr(net, "module") else net
 
 def compute_mst_prim(node_pairs_valid, cost_pred_batch):
     # 创建 NetworkX 图
@@ -202,7 +210,7 @@ def relation_infer(h, out, net, obj_token, rln_token, nms=False, map_=False):
                 relation_feature2 = torch.cat(
                     (object_token[batch_id, node_pairs[1], :], object_token[batch_id, node_pairs[0], :]), 1)
 
-            relation_pred1 = net.module.relation_embed(relation_feature1).detach()
+            relation_pred1 = _unwrap_module(net).relation_embed(relation_feature1).detach()
             # relation_feature1_idx_ = torch.randperm(relation_feature1.shape[0])
             # relation_feature1_shuffle = relation_feature1[relation_feature1_idx_, :].to(relation_feature1.device)
             # relation_feature1_shuffle_pred = model.relation_embed(relation_feature1_shuffle).detach()
@@ -228,7 +236,7 @@ def relation_infer(h, out, net, obj_token, rln_token, nms=False, map_=False):
             #         [14.5805, -14.7794],
             #         [10.0542, -9.4428],
             #         [4.5389, -4.6362]], device='cuda:0')
-            relation_pred2 = net.module.relation_embed(relation_feature2).detach()
+            relation_pred2 = _unwrap_module(net).relation_embed(relation_feature2).detach()
             # tensor([[  4.8644,  -5.4507],
             #         [ -5.2172,   5.0186],
             #         [  9.4442,  -6.4797],
@@ -513,8 +521,8 @@ def relation_infer_mst(h, out, net, obj_token, rln_token, nms=False, map_=False)
                 relation_feature2 = torch.cat(
                     (object_token[batch_id, node_pairs[1], :], object_token[batch_id, node_pairs[0], :]), 1)
 
-            relation_pred1 = net.module.relation_embed(relation_feature1).detach()
-            relation_pred2 = net.module.relation_embed(relation_feature2).detach()
+            relation_pred1 = _unwrap_module(net).relation_embed(relation_feature1).detach()
+            relation_pred2 = _unwrap_module(net).relation_embed(relation_feature2).detach()
             relation_pred = (relation_pred1 + relation_pred2) / 2.0
 
             relation_pred_softmax_batch = F.softmax(relation_pred, dim=-1).detach()
@@ -788,10 +796,10 @@ def relation_infer_gnn(h, out, model, obj_token, rln_token, nms=False, map_=Fals
 # #################################  TRAIN FUNCTIONS #####################################
 # ########################################################################################
 # ########################################################################################
-import time
 
 def epoch_train(train_loader, net, loss_function, optimizer,
-                device, last_epoch, epoch_now, max_epoch):
+                device, last_epoch, epoch_now, max_epoch,
+                *, clip_max_norm=20.0, after_optimizer_step=None):
     # 开启 anomaly detection
     # torch.autograd.set_detect_anomaly(True)
 
@@ -825,7 +833,7 @@ def epoch_train(train_loader, net, loss_function, optimizer,
 
 
         batch_end = time.time() - batch_start
-        if dist.get_rank() == 0 and i % 100 == 0:
+        if _dist_rank() == 0 and i % 100 == 0:
             print(
                 'Epoch: {} / {} Batch: {} / {} || Train total: {:.4f} class: {:.4f} nodes: {:.4f} edges: {:.4f} boxes: {:.4f} cards: {:.4f} take {:.4f} sec.'
                     .format(epoch_now - 1, max_epoch, i, all_len, losses['total'], losses['class'], losses['nodes'], losses['edges'], losses['boxes'], losses['cards'], batch_end))
@@ -858,7 +866,7 @@ def epoch_train(train_loader, net, loss_function, optimizer,
         #     if param.grad is None and param.requires_grad is True:
         #         print(name)
 
-        torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=20, norm_type=2)
+        torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=clip_max_norm, norm_type=2)
         # torch.nn.utils.clip_grad_value_(net.parameters(), clip_value=0.1)
 
         # if dist.get_rank() == 0:
@@ -872,6 +880,8 @@ def epoch_train(train_loader, net, loss_function, optimizer,
         #     for name in net.module.state_dict():
         #         print("S"*20, name, ":", net.module.state_dict()[name])
         optimizer.step()
+        if after_optimizer_step is not None:
+            after_optimizer_step(net=net, optimizer=optimizer, epoch=epoch_now, batch_index=i)
 
         # if dist.get_rank() == 0:
         #     print("P"*20)

@@ -1,0 +1,27 @@
+defaults:
+  - data: guyot_smoke
+  - model: treeformer_2d
+  - train: default
+  - optimizer: adamw_step
+  - logging: tensorboard
+  - ema: disabled
+  - checkpoint: default
+  - distributed: single
+  - _self_
+
+legacy_config_path: null
+runtime:
+  device: cuda
+  output_dir: ${TRAIN.SAVE_PATH}/runs/${log.exp_name}_${DATA.SEED}
+  fail_if_cuda_unavailable: true
+  deterministic: false
+  parameter_report_name: parameter_report.json
+
+hydra:
+  job:
+    chdir: false
+  run:
+    dir: ${runtime.output_dir}/hydra/${now:%Y%m%d_%H%M%S}
+  sweep:
+    dir: ${TRAIN.SAVE_PATH}/multirun/${now:%Y%m%d_%H%M%S}
+    subdir: ${hydra.job.num}

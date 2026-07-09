@@ -1,0 +1,11 @@
+# @package _global_
+optimizer:
+  name: schedulefree_adamw
+  lr: ${TRAIN.LR}
+  betas: [0.9, 0.999]
+  eps: 1e-8
+  weight_decay: ${TRAIN.WEIGHT_DECAY}
+  warmup_steps: 0
+  r: 0.0
+  weight_lr_power: 2.0
+  foreach: true

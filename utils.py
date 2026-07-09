@@ -1,13 +1,8 @@
-
-import torch
-import numpy as np
 import logging
-from mmcv.utils import get_logger
+
+import numpy as np
+import torch
 import pyvista
-try:
-    from skimage.measure import marching_cubes_lewiner
-except ImportError:
-    from skimage.measure import marching_cubes as marching_cubes_lewiner
 
 
 def get_total_grad_norm(parameters, norm_type=2):
@@ -33,21 +28,26 @@ def image_graph_collate_road_network(batch):
 
 
 def get_root_logger(log_file=None, log_level=logging.INFO):
-    """Use ``get_logger`` method in mmcv to get the root logger.
-    The logger will be initialized if it has not been initialized. By default a
-    StreamHandler will be added. If ``log_file`` is specified, a FileHandler
-    will also be added. The name of the root logger is the top-level package
-    name, e.g., "mmaction".
-    Args:
-        log_file (str | None): The log filename. If specified, a FileHandler
-            will be added to the root logger.
-        log_level (int): The root logger level. Note that only the process of
-            rank 0 is affected, while other processes will set the level to
-            "Error" and be silent most of the time.
-    Returns:
-        :obj:`logging.Logger`: The root logger.
-    """
-    return get_logger(__name__.split('.')[0], log_file, log_level)
+    """Return the project root logger without OpenMMLab dependencies."""
+    logger = logging.getLogger(__name__.split(".")[0])
+    logger.setLevel(log_level)
+
+    if not logger.handlers:
+        stream_handler = logging.StreamHandler()
+        stream_handler.setLevel(log_level)
+        logger.addHandler(stream_handler)
+
+    if log_file is not None:
+        has_same_file = any(
+            isinstance(handler, logging.FileHandler) and handler.baseFilename == log_file
+            for handler in logger.handlers
+        )
+        if not has_same_file:
+            file_handler = logging.FileHandler(log_file)
+            file_handler.setLevel(log_level)
+            logger.addHandler(file_handler)
+
+    return logger
 
 def save_input(path, idx, patch, patch_coord, patch_edge):
     """[summary]

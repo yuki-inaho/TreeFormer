@@ -1,0 +1,27 @@
+# @package _global_
+optimizer:
+  name: muon_schedulefree
+  lr: ${TRAIN.LR}
+  lr_backbone: ${TRAIN.LR_BACKBONE}
+  muon_weight_decay: ${TRAIN.WEIGHT_DECAY}
+  aux_weight_decay: ${TRAIN.WEIGHT_DECAY}
+  muon_momentum: 0.95
+  muon_nesterov: true
+  muon_ns_steps: 5
+  aux_betas: [0.9, 0.999]
+  aux_eps: 1e-8
+  outer_momentum: 0.9
+  weight_decay_at_y: 0.0
+  weight_lr_power: 2.0
+  r: 0.0
+  aux_keywords:
+    - bias
+    - norm
+    - bn
+    - ln
+    - embedding
+    - embed
+    - head
+    - reference_points
+    - sampling_offsets
+  force_muon_keywords: []

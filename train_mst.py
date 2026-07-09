@@ -151,7 +151,7 @@ def load_detr_dataset(tgt_data_path):
     ids = path_list
 
     for id in ids:
-        datapoint = torch.load(tgt_data_path + '/' + id)
+        datapoint = torch.load(tgt_data_path + '/' + id, weights_only=False)
         DETR_points_left_up = datapoint.list_DETR_points_left_up
         DETR_node_collections = datapoint.DETR_node_collections
 
@@ -630,8 +630,9 @@ class LoadCNNDataset(Dataset):
                                                                                                     list_DETR_points_left_up,
                                                                                                     list_DETR_node_collections_idx)
             G_tree = nx.Graph()
+            G_tree.add_nodes_from(range(len(list_DETR_points_left_up)))
             G_tree.add_edges_from(list_DETR_node_collections_idx.tolist())
-            if not nx.is_tree(G_tree):
+            if len(G_tree) == 0 or not nx.is_tree(G_tree):
                 # 不是树就不进行旋转了
                 feature_img = old_save_img
                 list_DETR_points_left_up = old_save_list_DETR_points_left_up
@@ -766,11 +767,13 @@ def build_train_val_datasets(data_config):
         )
 
     train_path, val_path = resolve_train_val_paths(data_config)
+    train_dataset = LoadCNNDataset(parent_path=train_path, max_size=data_config.MAX_SIZE, max_change_light_rate=0.3,
+                                   is_train=False, is_rotate=True)
+    val_dataset = LoadCNNDataset(parent_path=val_path, max_size=data_config.MAX_SIZE, max_change_light_rate=0.3,
+                                 is_train=False, is_rotate=False)
     return (
-        LoadCNNDataset(parent_path=train_path, max_size=data_config.MAX_SIZE, max_change_light_rate=0.3,
-                       is_train=False, is_rotate=True),
-        LoadCNNDataset(parent_path=val_path, max_size=data_config.MAX_SIZE, max_change_light_rate=0.3,
-                       is_train=False, is_rotate=False),
+        _limit_dataset(train_dataset, _get_data_attr(data_config, "TRAIN_LIMIT")),
+        _limit_dataset(val_dataset, _get_data_attr(data_config, "VAL_LIMIT")),
     )
 
 

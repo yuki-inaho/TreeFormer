@@ -1,0 +1,38 @@
+# @package _global_
+MODEL:
+  NUM_CLASSES: 2
+  ENCODER:
+    TYPE: deformable_transformer_backbone
+    NAME: deformable_transformer_backbone
+    HIDDEN_DIM: 512
+    POSITION_EMBEDDING: sine
+    LR_BACKBONE: 2e-5
+    NUM_FEATURE_LEVELS: 4
+    BACKBONE: resnet50
+    MASKS: false
+    DILATION: false
+    IN_CHANS: 3
+    DEPTHS: [4, 4, 8, 8]
+  DECODER:
+    TYPE: deformable_transformer
+    NAME: deformable_transformer
+    HIDDEN_DIM: 512
+    NHEADS: 8
+    ENC_LAYERS: 4
+    DEC_LAYERS: 4
+    DIM_FEEDFORWARD: 512
+    DROPOUT: 0.15
+    ACTIVATION: relu
+    NUM_FEATURE_LEVELS: 4
+    DEC_N_POINTS: 4
+    ENC_N_POINTS: 4
+    TWO_STAGE: false
+    AUX_LOSS: false
+    WITH_BOX_REFINE: false
+    OBJ_TOKEN: 256
+    RLN_TOKEN: 1
+    DUMMY_TOKEN: 0
+    RLN_ATTN: true
+  MATCHER:
+    C_CLASS: 3
+    C_NODE: 5
