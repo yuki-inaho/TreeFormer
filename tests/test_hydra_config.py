@@ -20,7 +20,7 @@ def test_hydra_default_config_composes_and_preserves_legacy_sections():
     assert cfg.tensorboard.enabled is True
     assert cfg.checkpoint.metric_name == "val/smd"
     assert cfg.DATA.AUGMENTATION.enabled is False
-    assert cfg.DATA.LEGACY_ROTATE is True
+    assert cfg.DATA.LEGACY_ROTATE is False
 
     legacy = make_legacy_config(cfg)
     assert legacy.DATA.DATASET == "guyot-2D"

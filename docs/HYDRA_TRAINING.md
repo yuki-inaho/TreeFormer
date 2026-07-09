@@ -31,8 +31,6 @@ export TREEFORMER_PRIVATE_DATA=<legacy_treeformer_dataset_root>
 
 just cfg-private-pretrained-gpu-batch12
 just smoke-private-pretrained-gpu-batch12
-just cfg-private-pretrained-gpu-batch12-aug
-just smoke-private-pretrained-gpu-batch12-aug
 ```
 
 The prepared smoke template uses:
@@ -52,7 +50,9 @@ With `ema=default`, EMA shadow weights and EMA validation stay on GPU. On RTX A4
 
 ## Augmentation
 
-Use `augmentation=regularized` for the reusable DA path. It is disabled by default to preserve the legacy baseline.
+The current private-data curriculum intentionally avoids geometric and deformation augmentation. Use `augmentation=disabled` for the stabilization stage and `augmentation=photometric_opencv` only after the no-DA baseline behaves well.
+
+`augmentation=regularized` and `augmentation=geometry_mild` remain available as implementation experiments, but they are not part of the current default curriculum.
 
 The augmentation code is split by contract:
 
@@ -78,12 +78,17 @@ uv pip install --python "$TREEFORMER_PYTHON" --project . --group albumentationsx
 just install-albumentationsx
 ```
 
-For a short GPU smoke run with pretrained weights and DA:
+For a short GPU smoke run with pretrained weights and photometric-only DA:
 
 ```bash
 export TREEFORMER_PRIVATE_DATA=<legacy_treeformer_dataset_root>
-just cfg-private-pretrained-gpu-batch12-aug
-just smoke-private-pretrained-gpu-batch12-aug
+PYTHONPATH=. CUDA_VISIBLE_DEVICES=0 "$TREEFORMER_PYTHON" train_hydra.py \
+  augmentation=photometric_opencv optimizer=muon_schedulefree ema=default \
+  logging=tensorboard checkpoint.pretrained="$TREEFORMER_PRETRAINED_CHECKPOINT" \
+  checkpoint.pretrained_key=net checkpoint.pretrained_strict=true \
+  DATA.DATASET=treeformer-2D DATA.DATA_PATH="$TREEFORMER_PRIVATE_DATA" \
+  DATA.BATCH_SIZE=12 DATA.MAX_SIZE=128 DATA.NUM_WORKERS=0 \
+  DATA.TRAIN_LIMIT=24 DATA.VAL_LIMIT=12 TRAIN.EPOCHS=3
 ```
 
 The smoke recipe runs 3 epochs with batch size 12, GPU EMA, TensorBoard, Muon + ScheduleFree, and repo-external output paths. Keep the dataset root in the environment variable and out of committed docs.
@@ -98,14 +103,13 @@ Recommended initial curriculum for a pretrained private legacy TreeFormer-format
 |---|---:|---:|---:|---|---|
 | 0. Stabilize | `augmentation=disabled` | 20 | `3e-5` / `1e-5` | Confirm pretrained load, dataset contract, and optimizer stability without new DA noise. | Continue only if train loss declines and val_smd does not spike. |
 | 1. Optical | `augmentation=photometric_opencv` | 80 | `5e-5` / `1.5e-5` | Learn robustness to illumination, noise, blur, and color shifts while graph labels stay unchanged. | Use best checkpoint if val_smd improves; otherwise return to Stage 0 best. |
-| 2. Graph DA Warmup | `augmentation=regularized` | 180 | `3e-5` / `1e-5` | Add graph-synchronized affine and elastic deformation while preserving topology. | Keep if best val_smd beats Stage 1 best or improves stability. |
-| 3. Mild Graph DA | `augmentation=geometry_mild` | 260 | `1.5e-5` / `5e-6` | Continue with conservative graph-aware deformation at lower LR for late regularization. | Stop early if val_smd regresses for a sustained window. |
 
 Operational notes:
 
 - Use `best.pt` from the previous stage as `checkpoint.resume` for the next stage, and set `checkpoint.pretrained=null` after Stage 0.
 - Keep `DATA.BATCH_SIZE=12`, `DATA.MAX_SIZE=128`, GPU EMA, TensorBoard, and Muon + ScheduleFree unless a stage shows instability.
-- Prefer OpenCV augmentation configs for default runs. Use `regularized_albumentationsx` only after explicit license acceptance and optional dependency installation.
+- Do not use random crop, rotate, scale, affine, perspective, elastic, or graph-deformation augmentation in this curriculum.
+- Prefer the OpenCV photometric config for Stage 1. Use `regularized_albumentationsx` only after explicit license acceptance and optional dependency installation, and only for image-only photometric experiments.
 - Do not mix private dataset paths into docs, commit messages, or work records; pass them through `TREEFORMER_PRIVATE_DATA`.
 
 Config-only checks are available:
@@ -114,8 +118,6 @@ Config-only checks are available:
 just cfg-private-curriculum-stage0
 export TREEFORMER_CURRICULUM_RESUME=<previous_stage_best_or_last_checkpoint>
 just cfg-private-curriculum-stage1
-just cfg-private-curriculum-stage2
-just cfg-private-curriculum-stage3
 ```
 
 ## Config groups
