@@ -84,7 +84,11 @@ train-private-aux-supervised:
 
 cache-private-fast-seg:
     @test -n "{{private_treeformer_data}}" || (echo "Set TREEFORMER_PRIVATE_DATA to a legacy TreeFormer dataset root" >&2; exit 2)
-    @PYTHONPATH=. {{python}} generate_fast_seg_cache.py --dataset-root "{{private_treeformer_data}}" --cache-root "{{seg_cache_root}}" --splits train val --max-size "${TREEFORMER_MAX_SIZE:-128}" --resize-policy "${TREEFORMER_SEG_RESIZE_POLICY:-legacy_half}"
+    @PYTHONPATH=. {{python}} generate_fast_seg_cache.py --dataset-root "{{private_treeformer_data}}" --cache-root "{{seg_cache_root}}" --splits train val --max-size "${TREEFORMER_MAX_SIZE:-128}" --resize-policy "${TREEFORMER_SEG_RESIZE_POLICY:-legacy_half}" --aux-target-mode "${TREEFORMER_AUX_TARGET_MODE:-seg_only}" --heatmap-sigma "${TREEFORMER_HEATMAP_SIGMA:-3.0}" --heatmap-cutoff "${TREEFORMER_HEATMAP_CUTOFF:-0.01}"
+
+cache-private-fast-seg-heatmap:
+    @test -n "{{private_treeformer_data}}" || (echo "Set TREEFORMER_PRIVATE_DATA to a legacy TreeFormer dataset root" >&2; exit 2)
+    @PYTHONPATH=. {{python}} generate_fast_seg_cache.py --dataset-root "{{private_treeformer_data}}" --cache-root "{{seg_cache_root}}" --splits train val --max-size "${TREEFORMER_MAX_SIZE:-128}" --resize-policy "${TREEFORMER_SEG_RESIZE_POLICY:-legacy_half}" --aux-target-mode seg_heatmap --heatmap-sigma "${TREEFORMER_HEATMAP_SIGMA:-3.0}" --heatmap-cutoff "${TREEFORMER_HEATMAP_CUTOFF:-0.01}"
 
 cfg-private-seg-supervised:
     @test -n "{{private_treeformer_data}}" || (echo "Set TREEFORMER_PRIVATE_DATA to a legacy TreeFormer dataset root" >&2; exit 2)

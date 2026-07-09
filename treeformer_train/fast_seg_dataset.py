@@ -150,6 +150,11 @@ def build_fast_seg_cache(
     detail_scales: tuple[int, ...] = (1, 2, 4),
     detail_support_kernel_size: int = 3,
     resize_policy: str = "legacy_half",
+    aux_target_mode: str = "seg_only",
+    heatmap_sigma: float = 3.0,
+    heatmap_cutoff: float = 0.01,
+    paf_line_thickness: int = 2,
+    paf_mask_thickness: int = 6,
     overwrite: bool = False,
 ) -> dict[str, int]:
     samples = discover_fast_seg_samples(split_root)
@@ -162,6 +167,21 @@ def build_fast_seg_cache(
     }
     if str(resize_policy).lower() != "legacy_half":
         detail_config["resize_policy"] = str(resize_policy).lower()
+    aux_target_config = make_aux_map_target_config(
+        mode=aux_target_mode,
+        heatmap_sigma=heatmap_sigma,
+        heatmap_cutoff=heatmap_cutoff,
+        paf_line_thickness=paf_line_thickness,
+        paf_mask_thickness=paf_mask_thickness,
+    )
+    if aux_target_config.mode != "seg_only":
+        detail_config["aux_target"] = {
+            "mode": aux_target_config.mode,
+            "heatmap_sigma": aux_target_config.heatmap_sigma,
+            "heatmap_cutoff": aux_target_config.heatmap_cutoff,
+            "paf_line_thickness": aux_target_config.paf_line_thickness,
+            "paf_mask_thickness": aux_target_config.paf_mask_thickness,
+        }
     written = 0
     skipped = 0
     for sample in samples:
@@ -182,6 +202,12 @@ def build_fast_seg_cache(
             support_kernel_size=detail_support_kernel_size,
         ).squeeze(0).squeeze(0)
         nodes, edges = _load_graph_annotation(sample.data_path)
+        pafs, paf_mask, heatmap = make_aux_map_targets(
+            nodes,
+            edges,
+            image_size=(int(segmentation.shape[-2]), int(segmentation.shape[-1])),
+            config=aux_target_config,
+        )
         payload = {
             "sample_id": sample.sample_id,
             "image": image,
@@ -189,6 +215,9 @@ def build_fast_seg_cache(
             "detail_boundary": detail.contiguous(),
             "nodes": nodes,
             "edges": edges,
+            "paf": pafs,
+            "paf_mask": paf_mask,
+            "heatmap": heatmap,
             "detail_config": detail_config,
             "max_size": int(max_size),
         }
@@ -248,6 +277,14 @@ class FastSegSupervisedDataset(Dataset):
         }
         if self.resize_policy != "legacy_half":
             self.detail_config["resize_policy"] = self.resize_policy
+        if self.aux_target_config.mode != "seg_only":
+            self.detail_config["aux_target"] = {
+                "mode": self.aux_target_config.mode,
+                "heatmap_sigma": self.aux_target_config.heatmap_sigma,
+                "heatmap_cutoff": self.aux_target_config.heatmap_cutoff,
+                "paf_line_thickness": self.aux_target_config.paf_line_thickness,
+                "paf_mask_thickness": self.aux_target_config.paf_mask_thickness,
+            }
         self._memory_cache: dict[int, tuple[Any, ...]] = {}
 
     def __len__(self) -> int:
@@ -258,7 +295,19 @@ class FastSegSupervisedDataset(Dataset):
             raise ValueError("cache_dir is not configured")
         return self.cache_dir / f"{_cache_key(sample, max_size=self.max_size, detail_config=self.detail_config)}.pt"
 
-    def _load_from_disk_cache(self, sample: FastSegSample) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    def _load_from_disk_cache(
+        self,
+        sample: FastSegSample,
+    ) -> tuple[
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor | None,
+        torch.Tensor | None,
+        torch.Tensor | None,
+    ]:
         cache_path = self._cache_path(sample)
         if not cache_path.exists():
             raise FileNotFoundError(
@@ -272,6 +321,9 @@ class FastSegSupervisedDataset(Dataset):
             payload["detail_boundary"].float(),
             payload["nodes"].float(),
             payload["edges"].long(),
+            payload.get("paf", None).float() if payload.get("paf", None) is not None else None,
+            payload.get("paf_mask", None).bool() if payload.get("paf_mask", None) is not None else None,
+            payload.get("heatmap", None).float() if payload.get("heatmap", None) is not None else None,
         )
 
     def _build_sample(self, sample: FastSegSample) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -295,17 +347,25 @@ class FastSegSupervisedDataset(Dataset):
             return self._memory_cache[index]
         sample = self.samples[index]
         if self.cache_mode == "disk":
-            image, segmentation, detail, nodes, edges = self._load_from_disk_cache(sample)
+            image, segmentation, detail, nodes, edges, cached_pafs, cached_paf_mask, cached_heatmap = self._load_from_disk_cache(sample)
         else:
             image, segmentation, detail, nodes, edges = self._build_sample(sample)
+            cached_pafs = None
+            cached_paf_mask = None
+            cached_heatmap = None
 
         height, width = int(segmentation.shape[-2]), int(segmentation.shape[-1])
-        pafs, paf_mask, heatmap = make_aux_map_targets(
-            nodes,
-            edges,
-            image_size=(height, width),
-            config=self.aux_target_config,
-        )
+        if cached_pafs is None or cached_paf_mask is None or cached_heatmap is None:
+            pafs, paf_mask, heatmap = make_aux_map_targets(
+                nodes,
+                edges,
+                image_size=(height, width),
+                config=self.aux_target_config,
+            )
+        else:
+            pafs = cached_pafs
+            paf_mask = cached_paf_mask
+            heatmap = cached_heatmap
         item = (
             image.contiguous(),
             sample.sample_id,
@@ -336,6 +396,11 @@ def main() -> None:
     parser.add_argument("--detail-scales", default="1,2,4")
     parser.add_argument("--detail-support-kernel-size", type=int, default=3)
     parser.add_argument("--resize-policy", choices=["legacy_half", "full"], default="legacy_half")
+    parser.add_argument("--aux-target-mode", default="seg_only")
+    parser.add_argument("--heatmap-sigma", type=float, default=3.0)
+    parser.add_argument("--heatmap-cutoff", type=float, default=0.01)
+    parser.add_argument("--paf-line-thickness", type=int, default=2)
+    parser.add_argument("--paf-mask-thickness", type=int, default=6)
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()
 
@@ -352,6 +417,11 @@ def main() -> None:
             detail_scales=scales,
             detail_support_kernel_size=int(args.detail_support_kernel_size),
             resize_policy=str(args.resize_policy),
+            aux_target_mode=str(args.aux_target_mode),
+            heatmap_sigma=float(args.heatmap_sigma),
+            heatmap_cutoff=float(args.heatmap_cutoff),
+            paf_line_thickness=int(args.paf_line_thickness),
+            paf_mask_thickness=int(args.paf_mask_thickness),
             overwrite=bool(args.overwrite),
         )
         for key, value in stats.items():

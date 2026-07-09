@@ -121,6 +121,34 @@ def test_fast_seg_dataset_disk_cache_respects_resize_policy(tmp_path: Path):
     assert image.shape == (3, 51, 64)
 
 
+def test_fast_seg_dataset_disk_cache_can_store_heatmap_targets(tmp_path: Path):
+    split_root = _write_split(tmp_path, "train", count=1)
+    cache_dir = tmp_path / "cache" / "train"
+
+    stats = build_fast_seg_cache(
+        split_root=split_root,
+        cache_dir=cache_dir,
+        max_size=64,
+        aux_target_mode="seg_heatmap",
+        heatmap_sigma=2.0,
+    )
+    dataset = FastSegSupervisedDataset(
+        split_root,
+        max_size=64,
+        cache_mode="disk",
+        cache_dir=cache_dir,
+        aux_target_mode="seg_heatmap",
+        heatmap_sigma=2.0,
+    )
+
+    assert stats == {"samples": 1, "written": 1, "skipped": 0}
+    assert len(list(cache_dir.glob("*.pt"))) == 1
+    _image, _sample_id, _nodes, _edges, _pafs, paf_mask, _segmentation, heatmap, _data_id = dataset[0]
+    assert paf_mask.sum().item() == 0
+    assert heatmap.max().item() > 0.9
+    assert heatmap.sum().item() > 2.0
+
+
 def test_build_train_val_datasets_can_select_fast_seg_loader(tmp_path: Path):
     _write_split(tmp_path, "train", count=2)
     _write_split(tmp_path, "val", count=1)
