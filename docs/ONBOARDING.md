@@ -14,9 +14,11 @@
 > 「壊してはいけない」品質・仕様ラインを箇条書きで列挙します。
 
 - dataset / checkpoint / smoke training output は repo 外、主に `/home/kasm-user/Desktop/TreeFormer_assets/` に置く。Git に混入させない。
+- private dataset の元パス、生成スクリプト名、収集条件、内部ラベル名は docs / workdoc に書かない。公開可能な範囲は、TreeFormer が消費する汎用フォーマット、split 構造、ファイル命名規則までに留める。
 - 既存の legacy training loop と `custom_collate_fn` の 9-tuple contract を壊さない。
 - raw `GuyotDataset` は `{image, nodes, edges, filename}` の dict contract を維持し、training 接続は `GuyotTrainingAdapter` で行う。
 - `DATA.DATA_PATH` / `TRAIN.SAVE_PATH` などの config path を優先し、古い hard-coded dataset path に戻さない。
+- 学習入力は現行 TreeFormer と同様に RGB 画像を主入力とする。RGB-D 由来データであっても、TreeFormer 側の dataset には RGB 画像と 2D graph annotation を渡す。
 - smoke training は完了済みだが、full training の完走は未保証。full training を開始する場合は別途実行計画とログ保存方針を決める。
 
 ## 3. 参照すべき合意済み資料
@@ -33,6 +35,7 @@
 | full train config | `configs/tree_2D_guyot_full_train.yaml` | 任意後続の full training 用 config。未実行 |
 | テスト資産 | `tests/test_guyot_dataset.py` | parser、dataset、adapter contract の pytest |
 | 既知課題リスト | `temp/workdoc_Jul08-2026_treeformer_guyot_pipeline.md` | residual risk、未実施事項、lint分類を参照 |
+| pretrained weights | `/home/kasm-user/Desktop/TreeFormer_assets/pretrained_weights/fork_source_main/` | フォーク元 README の Google Drive から取得した checkpoint。repo 外管理 |
 
 ## 4. タスク境界（任せること / 任せないこと）
 
@@ -47,6 +50,7 @@
 
 - 明示指示なしの full training 長時間実行。
 - repo 内への dataset / checkpoint / `.tar.gz` / `.pkl` / `.npz` 追加。
+- private dataset の実パス、生成コマンド、内部由来が分かる名前の docs 追記。
 - 既存 training loop、loss、model architecture の大規模変更。
 - user / 他エージェント由来の未追跡ファイルの勝手な削除や取り込み。
 
@@ -72,6 +76,70 @@
 - **レビュー/承認フロー:** 実装 → 最小テスト → artifact 混入確認 → workdoc / docs 更新 → commit。長時間学習は開始前に方針確認する。
 - **その他の運用ルール:** `git add -A` は避け、混在 worktree では明示ファイルだけ stage する。生成物 cleanup 後に `git status` を確認する。
 
+## 8. Pretrained Weights
+
+フォーク元 `huntorochi/TreeFormer` の README は pretrained checkpoint を Google Drive folder として公開している。
+
+- source repository: `https://github.com/huntorochi/TreeFormer`
+- Google Drive folder: `https://drive.google.com/drive/folders/1QFIwOAESSAF8Uc4it0-cAzBiMMszNJg2?usp=sharing`
+- local asset path: `/home/kasm-user/Desktop/TreeFormer_assets/pretrained_weights/fork_source_main/`
+- repo には checkpoint を置かない。
+
+取得コマンド:
+
+```bash
+mkdir -p /home/kasm-user/Desktop/TreeFormer_assets/pretrained_weights/fork_source_main
+
+uvx --from gdown gdown --folder \
+  'https://drive.google.com/drive/folders/1QFIwOAESSAF8Uc4it0-cAzBiMMszNJg2?usp=sharing' \
+  -O /home/kasm-user/Desktop/TreeFormer_assets/pretrained_weights/fork_source_main
+```
+
+確認済みの配置:
+
+```text
+pretrained_weights/fork_source_main/
+├── grapevein/
+│   ├── checkpoint_ours.pkl
+│   └── checkpoint_unmst.pkl
+├── root/
+│   ├── checkpoint_ours.pkl
+│   └── checkpoint_unmst.pkl
+└── synthetic/
+    ├── checkpoint_ours.pkl
+    └── checkpoint_unmst.pkl
+```
+
+`checkpoint_ours.pkl` は MST/tree-constrained 系、`checkpoint_unmst.pkl` は unconstrained 系として扱う。実際の評価 config へ接続する場合は、対象 dataset と model config の対応を確認してから `--checkpoint` に渡す。
+
+## 9. Dataset Format
+
+TreeFormer の legacy dataloader は split ごとの dataset root を `LoadCNNDataset(parent_path=...)` に渡す。入力は `img/` 配下の RGB 画像で、同名 stem の `.pt` graph annotation を `data/` から読む。
+
+split root の基本構造:
+
+```text
+<split_root>/
+├── data/
+│   └── <sample_id>.pt
+├── img/
+│   └── <sample_id>.png
+├── check/
+│   └── <sample_id>.png
+└── unet/
+    └── <sample_id>.png
+```
+
+`LoadCNNDataset` が直接読む最小要件:
+
+- `data/<sample_id>.pt`
+  - `list_DETR_points_left_up`: normalized 2D node coordinates
+  - `DETR_node_collections`: graph connectivity / edge path information
+- `img/<sample_id>.png`
+  - RGB image input。alpha channel がある場合は先頭 3 channel のみ使う。
+
+`check/` と `unet/` は legacy pipeline の補助画像・可視化・派生 mask 用として残す。新規 private dataset の場合も docs に実パスや生成元を残さず、上記の抽象 layout と file contract だけを書く。
+
 ---
 
 ### 付録: 参考情報
@@ -81,6 +149,7 @@
   - assets: `/home/kasm-user/Desktop/TreeFormer_assets`
   - uv venv: `/home/kasm-user/Desktop/venv/TreeFormer`
   - raw Guyot extracted dataset: `/home/kasm-user/Desktop/TreeFormer_assets/datasets/3D2cut_Single_Guyot_extracted`
+  - pretrained weights: `/home/kasm-user/Desktop/TreeFormer_assets/pretrained_weights/fork_source_main`
   - smoke outputs: `/home/kasm-user/Desktop/TreeFormer_assets/trained_weights_smoke`
 - **代表的なコマンド:**
 
