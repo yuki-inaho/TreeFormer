@@ -43,8 +43,34 @@ def test_hydra_regularized_augmentation_override_is_explicit():
         cfg = compose(config_name="config", overrides=["augmentation=regularized"])
 
     assert cfg.DATA.AUGMENTATION.enabled is True
-    assert cfg.DATA.AUGMENTATION.photometric.backend == "albumentationsx"
+    assert cfg.DATA.AUGMENTATION.photometric.backend == "opencv"
     assert cfg.DATA.LEGACY_ROTATE is False
 
     legacy = make_legacy_config(cfg)
     assert legacy.DATA.AUGMENTATION.photometric.allow_fallback is True
+
+
+def test_hydra_albumentationsx_augmentation_is_opt_in():
+    with initialize_config_dir(version_base="1.3", config_dir=str(CONF_DIR)):
+        cfg = compose(config_name="config", overrides=["augmentation=regularized_albumentationsx"])
+
+    assert cfg.DATA.AUGMENTATION.enabled is True
+    assert cfg.DATA.AUGMENTATION.photometric.backend == "albumentationsx"
+    assert cfg.DATA.AUGMENTATION.affine.enabled is True
+    assert cfg.DATA.AUGMENTATION.elastic.enabled is True
+
+
+def test_hydra_curriculum_augmentation_stages_compose():
+    stages = {
+        "photometric_opencv": (True, False, False),
+        "regularized": (True, True, True),
+        "geometry_mild": (True, True, True),
+    }
+    with initialize_config_dir(version_base="1.3", config_dir=str(CONF_DIR)):
+        for stage, expected in stages.items():
+            cfg = compose(config_name="config", overrides=[f"augmentation={stage}"])
+            photometric_enabled, affine_enabled, elastic_enabled = expected
+            assert cfg.DATA.AUGMENTATION.photometric.enabled is photometric_enabled
+            assert cfg.DATA.AUGMENTATION.affine.enabled is affine_enabled
+            assert cfg.DATA.AUGMENTATION.elastic.enabled is elastic_enabled
+            assert cfg.DATA.LEGACY_ROTATE is False

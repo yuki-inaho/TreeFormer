@@ -22,7 +22,9 @@
 - 学習入力は現行 TreeFormer と同様に RGB 画像を主入力とする。RGB-D 由来データであっても、TreeFormer 側の dataset には RGB 画像と 2D graph annotation を渡す。
 - smoke training は完了済みだが、full training の完走は未保証。full training を開始する場合は別途実行計画とログ保存方針を決める。
 - private legacy TreeFormer-format dataset で GPU smoke を行う場合は、dataset root を `TREEFORMER_PRIVATE_DATA` 環境変数で渡し、`just cfg-private-pretrained-gpu-batch12` で構成だけ確認してから `just smoke-private-pretrained-gpu-batch12` を実行する。batch size は 12 を初期値とし、smoke recipe は `DATA.TRAIN_LIMIT=24` / `DATA.VAL_LIMIT=12` を明示する。EMA は GPU 上で保持する。
-- regularized DA を使う場合は `augmentation=regularized` または `just smoke-private-pretrained-gpu-batch12-aug` を使う。光学系 DA は image-only、affine / elastic DA は RGB image と normalized node coordinates を同一 transform から同期更新する。edge topology は維持し、node が画像外へ出る transform は sample 単位で reject する。
+- regularized DA を使う場合は `augmentation=regularized` または `just smoke-private-pretrained-gpu-batch12-aug` を使う。既定 backend は OpenCV で、AlbumentationsX は AGPL / commercial dual license のため `augmentation=regularized_albumentationsx` で明示 opt-in する。光学系 DA は image-only、affine / elastic DA は RGB image と normalized node coordinates を同一 transform から同期更新する。edge topology は維持し、node が画像外へ出る transform は sample 単位で reject する。
+- optional AlbumentationsX backend は `uv pip install --python "$TREEFORMER_PYTHON" --project . --group albumentationsx` で導入する。入れない場合も OpenCV backend で training は継続できる。
+- 学習カリキュラムは Stage 0 no-DA stabilization、Stage 1 photometric OpenCV、Stage 2 graph-aware DA warmup、Stage 3 mild graph-aware DA の checkpoint-resume 方式を初期案とする。詳細は `docs/HYDRA_TRAINING.md` を参照。
 - batch size 12 の VRAM 目安: RTX A4500 / `DATA.MAX_SIZE=128` / official fork-source `grapevein/checkpoint_ours.pkl` / Muon + ScheduleFree 条件で、1 train batch の既存実測は約 3.1GiB。GPU EMA は model state 約 210MiB を shadow と validation backup に使うため、`ema=default` の運用目安は約 3.5-4.0GiB。8GiB 予算では batch size 12 を初期値としてよい。`nvidia-smi` の GPU 全体使用量は他プロセスを含むため、TreeFormer 単体の VRAM 目安と混同しない。
 - CUDA ops の検証は `MultiScaleDeformableAttention` module import と forward double / float check を基準にする。`models/ops/test.py` 全体は high-channel `gradcheck` まで実行するストレステストで、20GB GPU でも OOM し得るため、full test OOM を通常学習 1 batch の OOM と混同しない。
 

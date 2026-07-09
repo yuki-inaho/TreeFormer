@@ -16,15 +16,15 @@ DATA:
       blur_p: 0.15
     affine:
       enabled: true
-      p: 0.35
-      max_rotate_deg: 8.0
-      max_translate_frac: 0.035
-      scale_range: [0.96, 1.04]
+      p: 0.30
+      max_rotate_deg: 6.0
+      max_translate_frac: 0.025
+      scale_range: [0.97, 1.03]
       keep_all_nodes_inside: true
     elastic:
       enabled: true
-      p: 0.20
-      alpha_frac: 0.018
+      p: 0.15
+      alpha_frac: 0.014
       sigma_frac: 0.035
       grid_size: 4
       keep_all_nodes_inside: true

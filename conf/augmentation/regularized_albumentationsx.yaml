@@ -6,7 +6,7 @@ DATA:
     seed: ${DATA.SEED}
     photometric:
       enabled: true
-      backend: opencv
+      backend: albumentationsx
       allow_fallback: true
       p: 0.85
       brightness_contrast_p: 0.35
