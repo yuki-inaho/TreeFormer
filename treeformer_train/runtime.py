@@ -28,6 +28,56 @@ def setup_reproducibility(seed: int) -> None:
     random.seed(seed)
 
 
+def _get(config: Any, key: str, default: Any = None) -> Any:
+    if config is None:
+        return default
+    if isinstance(config, dict):
+        return config.get(key, default)
+    return getattr(config, key, default)
+
+
+def setup_torch_performance(config: Any, device: torch.device) -> None:
+    """Apply runtime performance flags that do not alter model structure."""
+
+    deterministic = bool(_get(config, "deterministic", False))
+    if deterministic:
+        torch.use_deterministic_algorithms(True, warn_only=True)
+    elif torch.are_deterministic_algorithms_enabled():
+        torch.use_deterministic_algorithms(False)
+
+    cuda_config = _get(config, "cuda", None)
+    if device.type != "cuda" or cuda_config is None:
+        return
+
+    allow_tf32 = bool(_get(cuda_config, "allow_tf32", False))
+    torch.backends.cuda.matmul.allow_tf32 = allow_tf32
+    torch.backends.cudnn.allow_tf32 = allow_tf32
+
+    torch.backends.cudnn.benchmark = bool(_get(cuda_config, "cudnn_benchmark", False)) and not deterministic
+
+    matmul_precision = _get(cuda_config, "float32_matmul_precision", None)
+    if matmul_precision not in (None, ""):
+        torch.set_float32_matmul_precision(str(matmul_precision))
+
+
+def torch_compile_options(config: Any) -> dict[str, Any]:
+    compile_config = _get(config, "compile", None)
+    options: dict[str, Any] = {
+        "mode": str(_get(compile_config, "mode", "reduce-overhead")),
+        "fullgraph": bool(_get(compile_config, "fullgraph", True)),
+        "dynamic": bool(_get(compile_config, "dynamic", False)),
+    }
+    backend = _get(compile_config, "backend", None)
+    if backend not in (None, ""):
+        options["backend"] = backend
+    return options
+
+
+def runtime_compile_enabled(config: Any, key: str) -> bool:
+    compile_config = _get(config, "compile", None)
+    return bool(_get(compile_config, key, False))
+
+
 def setup_distributed(config: Any) -> DistributedContext:
     mode = str(getattr(config, "mode", "single")) if not isinstance(config, dict) else str(config.get("mode", "single"))
     if mode == "single":

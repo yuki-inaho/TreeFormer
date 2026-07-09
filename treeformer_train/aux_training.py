@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 import torch
 import torch.distributed as dist
@@ -33,6 +33,12 @@ class AuxLossWeights:
     paf: float = 0.25
 
 
+AuxLossCore = Callable[
+    [torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor],
+    dict[str, torch.Tensor],
+]
+
+
 def _get(config: Any, key: str, default: Any = None) -> Any:
     if isinstance(config, dict):
         return config.get(key, default)
@@ -51,6 +57,14 @@ def _dist_rank() -> int:
     if not dist.is_available() or not dist.is_initialized():
         return 0
     return dist.get_rank()
+
+
+def _mark_compile_step_begin(device: torch.device) -> None:
+    if device.type != "cuda" or not hasattr(torch, "compiler"):
+        return
+    mark_step = getattr(torch.compiler, "cudagraph_mark_step_begin", None)
+    if mark_step is not None:
+        mark_step()
 
 
 def build_aux_loss_weights(train_config: Any) -> AuxLossWeights:
@@ -77,16 +91,26 @@ def build_aux_loss_weights(train_config: Any) -> AuxLossWeights:
     )
 
 
-def _prepare_aux_batch(batchdata: Any, device: torch.device) -> tuple[list[torch.Tensor], dict[str, torch.Tensor]]:
+def _maybe_stack_images(images: list[torch.Tensor]) -> torch.Tensor | list[torch.Tensor]:
+    if not images:
+        return images
+    first_shape = tuple(images[0].shape)
+    if all(tuple(image.shape) == first_shape for image in images):
+        return torch.stack(images, dim=0).contiguous()
+    return images
+
+
+def _prepare_aux_batch(batchdata: Any, device: torch.device) -> tuple[torch.Tensor | list[torch.Tensor], dict[str, torch.Tensor]]:
     batch = batchdata[0]
-    images = [img.to(device, dtype=torch.float32) for img in batch[0]]
+    non_blocking = device.type == "cuda"
+    images = [img.to(device, dtype=torch.float32, non_blocking=non_blocking) for img in batch[0]]
     targets = {
-        "paf": batch[3].to(device, dtype=torch.float32),
-        "paf_mask": batch[4].to(device, dtype=torch.bool),
-        "segmentation": batch[5].to(device, dtype=torch.float32),
-        "heatmap": batch[6].to(device, dtype=torch.float32),
+        "paf": batch[3].to(device, dtype=torch.float32, non_blocking=non_blocking),
+        "paf_mask": batch[4].to(device, dtype=torch.bool, non_blocking=non_blocking),
+        "segmentation": batch[5].to(device, dtype=torch.float32, non_blocking=non_blocking),
+        "heatmap": batch[6].to(device, dtype=torch.float32, non_blocking=non_blocking),
     }
-    return images, targets
+    return _maybe_stack_images(images), targets
 
 
 def _resize_like(source: torch.Tensor, target: torch.Tensor, *, mode: str = "bilinear") -> torch.Tensor:
@@ -151,24 +175,14 @@ def binary_focal_loss_with_logits(
     return (alpha_t * (1.0 - p_t).pow(gamma) * bce).mean()
 
 
-def compute_aux_losses(
-    output: dict[str, torch.Tensor],
-    targets: dict[str, torch.Tensor],
+def _compute_aux_loss_terms(
+    aux_maps: torch.Tensor,
+    seg_target: torch.Tensor,
+    heatmap_target: torch.Tensor,
+    paf_target: torch.Tensor,
+    paf_mask: torch.Tensor,
     weights: AuxLossWeights,
 ) -> dict[str, torch.Tensor]:
-    aux_maps = output.get("aux_maps")
-    if aux_maps is None:
-        raise KeyError("model output must contain 'aux_maps' for aux supervised training")
-    if aux_maps.shape[1] < 4:
-        raise ValueError(f"aux_maps must have at least 4 channels, got shape {tuple(aux_maps.shape)}")
-    if weights.detail > 0.0 and aux_maps.shape[1] < 5:
-        raise ValueError("detail boundary loss requires MODEL.AUX_HEAD.OUT_CHANNELS>=5")
-
-    seg_target = _prepare_binary_segmentation_target(targets["segmentation"])
-    heatmap_target = targets["heatmap"]
-    paf_target = targets["paf"]
-    paf_mask = targets["paf_mask"].to(dtype=torch.float32)
-
     seg_logits = _resize_like(aux_maps[:, 0:1], seg_target)
     heatmap_logits = _resize_like(aux_maps[:, 1:2], heatmap_target)
     paf_pred = _resize_like(aux_maps[:, 2:4], paf_target)
@@ -226,12 +240,76 @@ def compute_aux_losses(
     }
 
 
+def make_aux_loss_core(weights: AuxLossWeights) -> AuxLossCore:
+    def _core(
+        aux_maps: torch.Tensor,
+        seg_target: torch.Tensor,
+        heatmap_target: torch.Tensor,
+        paf_target: torch.Tensor,
+        paf_mask: torch.Tensor,
+    ) -> dict[str, torch.Tensor]:
+        return _compute_aux_loss_terms(aux_maps, seg_target, heatmap_target, paf_target, paf_mask, weights)
+
+    return _core
+
+
+@dataclass
+class AuxLossComputer:
+    weights: AuxLossWeights
+    core: AuxLossCore | None = None
+
+    def __post_init__(self) -> None:
+        if self.core is None:
+            self.core = make_aux_loss_core(self.weights)
+
+    def __call__(self, output: dict[str, torch.Tensor], targets: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+        return compute_aux_losses(output, targets, self.weights, loss_core=self.core)
+
+
+def build_aux_loss_computer(
+    weights: AuxLossWeights,
+    *,
+    compile_core: bool = False,
+    compile_options: dict[str, Any] | None = None,
+) -> AuxLossComputer:
+    core = make_aux_loss_core(weights)
+    if compile_core:
+        core = torch.compile(core, **(compile_options or {}))
+    return AuxLossComputer(weights=weights, core=core)
+
+
+def compute_aux_losses(
+    output: dict[str, torch.Tensor],
+    targets: dict[str, torch.Tensor],
+    weights: AuxLossWeights,
+    *,
+    loss_core: AuxLossCore | None = None,
+) -> dict[str, torch.Tensor]:
+    aux_maps = output.get("aux_maps")
+    if aux_maps is None:
+        raise KeyError("model output must contain 'aux_maps' for aux supervised training")
+    if aux_maps.shape[1] < 4:
+        raise ValueError(f"aux_maps must have at least 4 channels, got shape {tuple(aux_maps.shape)}")
+    if weights.detail > 0.0 and aux_maps.shape[1] < 5:
+        raise ValueError("detail boundary loss requires MODEL.AUX_HEAD.OUT_CHANNELS>=5")
+
+    seg_target = _prepare_binary_segmentation_target(targets["segmentation"])
+    heatmap_target = targets["heatmap"]
+    paf_target = targets["paf"]
+    paf_mask = targets["paf_mask"].to(dtype=torch.float32)
+    if loss_core is not None:
+        return loss_core(aux_maps, seg_target, heatmap_target, paf_target, paf_mask)
+    return _compute_aux_loss_terms(aux_maps, seg_target, heatmap_target, paf_target, paf_mask, weights)
+
+
 def compute_aux_eval_metrics(
     output: dict[str, torch.Tensor],
     targets: dict[str, torch.Tensor],
     weights: AuxLossWeights,
+    *,
+    loss_core: AuxLossCore | None = None,
 ) -> dict[str, torch.Tensor]:
-    losses = compute_aux_losses(output, targets, weights)
+    losses = compute_aux_losses(output, targets, weights, loss_core=loss_core)
     aux_maps = output["aux_maps"]
     seg_target = _prepare_binary_segmentation_target(targets["segmentation"])
     heatmap_target = targets["heatmap"]
@@ -332,22 +410,26 @@ def epoch_train_aux(
     epoch_now: int,
     max_epoch: int,
     loss_weights: AuxLossWeights,
+    loss_computer: AuxLossComputer | None = None,
     clip_max_norm: float = 20.0,
     after_optimizer_step: Any | None = None,
 ) -> dict[str, float]:
     net.train()
     averages = _MetricAverager()
     all_len = len(train_loader)
+    if loss_computer is None:
+        loss_computer = AuxLossComputer(loss_weights)
     for i, batchdata in enumerate(train_loader):
         batch_start = time.time()
         images, targets = _prepare_aux_batch(batchdata, device)
 
+        _mark_compile_step_begin(device)
         _, output = net(images)
-        losses = compute_aux_losses(output, targets, loss_weights)
+        losses = loss_computer(output, targets)
         batch_size = targets["segmentation"].shape[0]
         averages.update(losses, batch_size)
 
-        optimizer.zero_grad()
+        optimizer.zero_grad(set_to_none=True)
         losses["total"].backward()
         torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=clip_max_norm, norm_type=2)
         optimizer.step()
@@ -372,19 +454,23 @@ def epoch_train_aux(
     return averages.compute()
 
 
-@torch.no_grad()
+@torch.inference_mode()
 def epoch_val_aux(
     *,
     val_loader: Any,
     net: torch.nn.Module,
     device: torch.device,
     loss_weights: AuxLossWeights,
+    loss_computer: AuxLossComputer | None = None,
 ) -> dict[str, float]:
     net.eval()
     averages = _MetricAverager()
+    if loss_computer is None:
+        loss_computer = AuxLossComputer(loss_weights)
     for batchdata in val_loader:
         images, targets = _prepare_aux_batch(batchdata, device)
+        _mark_compile_step_begin(device)
         _, output = net(images)
-        metrics = compute_aux_eval_metrics(output, targets, loss_weights)
+        metrics = compute_aux_eval_metrics(output, targets, loss_weights, loss_core=loss_computer.core)
         averages.update(metrics, targets["segmentation"].shape[0])
     return averages.compute()

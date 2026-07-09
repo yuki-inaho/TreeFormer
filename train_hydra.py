@@ -14,7 +14,14 @@ from treeformer_train.checkpoint import CheckpointManager, load_pretrained_model
 from treeformer_train.config import as_plain_container, make_legacy_config
 from treeformer_train.ema import ModelEma, unwrap_model
 from treeformer_train.optimizers import build_optimizer_bundle, set_optimizer_eval_mode, set_optimizer_train_mode
-from treeformer_train.runtime import barrier, setup_distributed, setup_reproducibility
+from treeformer_train.runtime import (
+    barrier,
+    runtime_compile_enabled,
+    setup_distributed,
+    setup_reproducibility,
+    setup_torch_performance,
+    torch_compile_options,
+)
 from treeformer_train.tensorboard import TensorBoardLogger
 
 
@@ -147,6 +154,19 @@ def _is_aux_supervised_training(cfg: DictConfig) -> bool:
     return mode == "aux_supervised" or bool(OmegaConf.select(cfg, "TRAIN.SKIP_GRAPH_OUTPUT", default=False))
 
 
+def _compile_aux_head_if_requested(model: torch.nn.Module, cfg: DictConfig) -> bool:
+    if not runtime_compile_enabled(cfg.runtime, "aux_head"):
+        return False
+    unwrapped = unwrap_model(model)
+    aux_head = getattr(unwrapped, "aux_head", None)
+    if aux_head is None:
+        return False
+    if not hasattr(aux_head, "compile"):
+        raise RuntimeError("runtime.compile.aux_head=true requires torch.nn.Module.compile support")
+    aux_head.compile(**torch_compile_options(cfg.runtime))
+    return True
+
+
 def _aux_metrics_dict(
     *,
     train_metrics: dict[str, float],
@@ -207,6 +227,7 @@ def main(cfg: DictConfig) -> None:
     legacy_config = make_legacy_config(cfg)
     distributed_context = setup_distributed(cfg.distributed)
     device = _select_device(cfg, distributed_context.local_rank)
+    setup_torch_performance(cfg.runtime, device)
     setup_reproducibility(int(legacy_config.DATA.SEED) + distributed_context.rank)
 
     if distributed_context.is_rank_zero:
@@ -231,6 +252,9 @@ def main(cfg: DictConfig) -> None:
         strict=bool(cfg.checkpoint.pretrained_strict),
         map_location=device,
     )
+    compiled_aux_head = _compile_aux_head_if_requested(model, cfg)
+    if compiled_aux_head and distributed_context.is_rank_zero:
+        print(f"Compiled aux head with torch.compile options: {torch_compile_options(cfg.runtime)}")
 
     optimizer_bundle = build_optimizer_bundle(model, legacy_config.TRAIN, cfg.optimizer)
     output_dir = Path(str(OmegaConf.select(cfg, "runtime.output_dir")))
@@ -253,12 +277,20 @@ def main(cfg: DictConfig) -> None:
         )
 
     if aux_supervised_training:
-        from treeformer_train.aux_training import build_aux_loss_weights, epoch_train_aux, epoch_val_aux
+        from treeformer_train.aux_training import build_aux_loss_computer, build_aux_loss_weights, epoch_train_aux, epoch_val_aux
 
         aux_loss_weights = build_aux_loss_weights(legacy_config.TRAIN)
+        aux_loss_computer = build_aux_loss_computer(
+            aux_loss_weights,
+            compile_core=runtime_compile_enabled(cfg.runtime, "aux_loss"),
+            compile_options=torch_compile_options(cfg.runtime),
+        )
+        if runtime_compile_enabled(cfg.runtime, "aux_loss") and distributed_context.is_rank_zero:
+            print(f"Compiled aux loss core with torch.compile options: {torch_compile_options(cfg.runtime)}")
         loss = None
         smd = None
     else:
+        aux_loss_computer = None
         from epoch import epoch_train, epoch_val
         from losses_only import SetCriterion
         from metric_smd import StreetMoverDistance
@@ -314,6 +346,7 @@ def main(cfg: DictConfig) -> None:
                 epoch_now=epoch,
                 max_epoch=max_epochs,
                 loss_weights=aux_loss_weights,
+                loss_computer=aux_loss_computer,
                 clip_max_norm=float(legacy_config.TRAIN.CLIP_MAX_NORM),
                 after_optimizer_step=(lambda **_: ema.update(model)) if ema is not None else None,
             )
@@ -335,9 +368,21 @@ def main(cfg: DictConfig) -> None:
         if aux_supervised_training:
             if ema is not None and bool(cfg.ema.evaluate):
                 with ema.average_parameters(model):
-                    val_metrics = epoch_val_aux(val_loader=val_loader, net=model, device=device, loss_weights=aux_loss_weights)
+                    val_metrics = epoch_val_aux(
+                        val_loader=val_loader,
+                        net=model,
+                        device=device,
+                        loss_weights=aux_loss_weights,
+                        loss_computer=aux_loss_computer,
+                    )
             else:
-                val_metrics = epoch_val_aux(val_loader=val_loader, net=model, device=device, loss_weights=aux_loss_weights)
+                val_metrics = epoch_val_aux(
+                    val_loader=val_loader,
+                    net=model,
+                    device=device,
+                    loss_weights=aux_loss_weights,
+                    loss_computer=aux_loss_computer,
+                )
         else:
             if ema is not None and bool(cfg.ema.evaluate):
                 with ema.average_parameters(model):

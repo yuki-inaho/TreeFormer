@@ -1,6 +1,12 @@
 import torch
 
-from treeformer_train.aux_training import AuxLossWeights, build_aux_loss_weights, compute_aux_eval_metrics, compute_aux_losses
+from treeformer_train.aux_training import (
+    AuxLossWeights,
+    build_aux_loss_computer,
+    build_aux_loss_weights,
+    compute_aux_eval_metrics,
+    compute_aux_losses,
+)
 
 
 class Config:
@@ -65,6 +71,20 @@ def test_compute_aux_losses_backpropagates_with_resized_maps():
 
     assert output["aux_maps"].grad is not None
     assert torch.isfinite(output["aux_maps"].grad).all()
+
+
+def test_aux_loss_computer_matches_direct_loss_terms():
+    output = {"aux_maps": torch.randn(2, 5, 8, 10, requires_grad=True)}
+    targets = _targets()
+    weights = AuxLossWeights(segmentation_dice=1.0, detail=0.1, heatmap=0.0, paf=0.0)
+
+    direct = compute_aux_losses(output, targets, weights)
+    computer = build_aux_loss_computer(weights)
+    computed = computer(output, targets)
+
+    assert direct.keys() == computed.keys()
+    for key in direct:
+        assert torch.allclose(direct[key], computed[key])
 
 
 def test_compute_aux_eval_metrics_reports_validation_signals():

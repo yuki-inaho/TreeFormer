@@ -271,6 +271,42 @@ End-to-end one-epoch GPU timing with fast disk cache and 4 workers:
 
 Keep cache files outside Git. They are derived artifacts and may contain dataset-derived tensors.
 
+## Runtime GPU Speedups
+
+Hydra runtime config applies conservative GPU performance flags before model initialization:
+
+- `runtime.cuda.allow_tf32=true`
+- `runtime.cuda.cudnn_benchmark=true`
+- `runtime.cuda.float32_matmul_precision=high`
+
+These target Ampere-class GPUs and newer by allowing TensorFloat-32 matmul/convolution paths and cuDNN autotuning for fixed input sizes. Set `runtime.deterministic=true` for deterministic debugging; this disables cuDNN benchmark. Set `runtime.cuda.allow_tf32=false` or `runtime.cuda.float32_matmul_precision=highest` when exact FP32 behavior is more important than throughput.
+
+`torch.compile` is intentionally opt-in and local:
+
+- `runtime.compile.aux_head=true` compiles only the lightweight dense aux head with `nn.Module.compile()`. This preserves checkpoint `state_dict` keys.
+- `runtime.compile.aux_loss=true` compiles the pure tensor aux-loss core. Target validation and range checks remain eager so bad masks still fail with clear errors.
+- The full TreeFormer model is not compiled by default. The graph path still includes Python list/NestedTensor handling and a custom CUDA deformable-attention extension, both of which are poor first targets for whole-model fullgraph compilation.
+
+The full segmentation recipe enables aux-head and aux-loss compile by default:
+
+```bash
+just train-private-seg-supervised
+```
+
+Disable either path without editing tracked config:
+
+```bash
+TREEFORMER_COMPILE_AUX_HEAD=false TREEFORMER_COMPILE_AUX_LOSS=false \
+  just train-private-seg-supervised
+```
+
+The smoke recipe keeps compile disabled by default to avoid first-iteration compile overhead in short checks. Enable it explicitly when testing compile behavior:
+
+```bash
+TREEFORMER_COMPILE_AUX_HEAD=true TREEFORMER_COMPILE_AUX_LOSS=true \
+  just smoke-private-seg-supervised
+```
+
 ## Optimizers
 
 `adamw_step` preserves the original AdamW + StepLR behavior.

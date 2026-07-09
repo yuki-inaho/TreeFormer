@@ -12,6 +12,17 @@ def get_total_grad_norm(parameters, norm_type=2):
     return total_norm
 
 def nested_tensor_from_tensor_list(tensor_list):
+    if isinstance(tensor_list, NestedTensor):
+        return tensor_list
+    if torch.is_tensor(tensor_list):
+        if tensor_list.ndim == 4:
+            b, _, h, w = tensor_list.shape
+            mask = torch.zeros((b, h, w), dtype=torch.bool, device=tensor_list.device)
+            return NestedTensor(tensor_list, mask)
+        if tensor_list.ndim == 3:
+            tensor_list = [tensor_list]
+        else:
+            raise ValueError(f"not supported tensor shape: {tuple(tensor_list.shape)}")
     # TODO make this more general
     if tensor_list[0].ndim == 3:
         # TODO make it support different-sized images
