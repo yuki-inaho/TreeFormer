@@ -8,6 +8,7 @@ private_pretrained_output := env_var_or_default("TREEFORMER_TRAIN_OUTPUT", asset
 private_pretrained_aug_output := env_var_or_default("TREEFORMER_TRAIN_OUTPUT_AUG", assets_root + "/trained_weights_hydra_private_pretrained_aug")
 private_pretrained_curriculum_output := env_var_or_default("TREEFORMER_TRAIN_OUTPUT_CURRICULUM", assets_root + "/trained_weights_hydra_private_curriculum")
 private_aux_output := env_var_or_default("TREEFORMER_TRAIN_OUTPUT_AUX", assets_root + "/trained_weights_hydra_aux_supervised")
+aux_panel_output := env_var_or_default("TREEFORMER_AUX_PANEL_OUTPUT", assets_root + "/aux_inference_panels")
 
 hydra-cfg:
     PYTHONPATH=. {{python}} train_hydra.py --cfg job
@@ -50,6 +51,11 @@ infer-panels:
     @test -n "{{private_treeformer_data}}" || (echo "Set TREEFORMER_PRIVATE_DATA to a legacy TreeFormer dataset root" >&2; exit 2)
     @test -n "${TREEFORMER_INFER_CHECKPOINT:-}" || (echo "Set TREEFORMER_INFER_CHECKPOINT to best.pt or another checkpoint" >&2; exit 2)
     @PYTHONPATH=. CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0} {{python}} infer_panel_treeformer.py --legacy-split-root "{{private_treeformer_data}}/val" --output-dir "${TREEFORMER_INFER_OUTPUT:-{{assets_root}}/inference_panels}" --run "${TREEFORMER_INFER_LABEL:-Ours}|${TREEFORMER_INFER_CHECKPOINT}|${TREEFORMER_INFER_MODE:-mst}" --device cuda --max-size 128 --inset --save-graph-json
+
+infer-aux-panels:
+    @test -n "{{private_treeformer_data}}" || (echo "Set TREEFORMER_PRIVATE_DATA to a legacy TreeFormer dataset root" >&2; exit 2)
+    @test -n "${TREEFORMER_AUX_CHECKPOINT:-}" || (echo "Set TREEFORMER_AUX_CHECKPOINT to an aux-supervised best.pt or last.pt checkpoint" >&2; exit 2)
+    @PYTHONPATH=. CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0} {{python}} infer_aux_panel_treeformer.py --legacy-split-root "{{private_treeformer_data}}/val" --checkpoint "${TREEFORMER_AUX_CHECKPOINT}" --output-dir "{{aux_panel_output}}" --device cuda --max-size 128 --limit "${TREEFORMER_AUX_PANEL_LIMIT:-10}" --save-json
 
 cfg-private-curriculum-stage0:
     @test -n "{{private_treeformer_data}}" || (echo "Set TREEFORMER_PRIVATE_DATA to a legacy TreeFormer dataset root" >&2; exit 2)

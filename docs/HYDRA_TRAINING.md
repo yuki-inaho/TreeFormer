@@ -88,6 +88,18 @@ export TREEFORMER_PRIVATE_DATA=<legacy_treeformer_dataset_root>
 just train-private-aux-supervised
 ```
 
+After an aux stage, render validation panels before deciding the next step:
+
+```bash
+export TREEFORMER_PRIVATE_DATA=<legacy_treeformer_dataset_root>
+export TREEFORMER_AUX_CHECKPOINT=<aux_stage_best_checkpoint>
+export TREEFORMER_AUX_PANEL_OUTPUT=${TREEFORMER_ASSETS_ROOT:-../TreeFormer_assets}/aux_inference_panels/<stage_name>
+
+just infer-aux-panels
+```
+
+`infer_aux_panel_treeformer.py` writes one `<sample_id>_aux_panel.png` per image. The panels include input, GT/pred segmentation overlays, STDC-style detail edge maps derived from segmentation masks, GT/pred node heatmaps, and GT/pred PAF magnitude/direction maps. The detail edge map is a visualization target derived from segmentation by a multi-scale Laplacian-style boundary extractor; it is not a separate model output channel in the current 4-channel aux head.
+
 Operational notes:
 
 - Use `augmentation=disabled` first. Do not use geometric, deformation, crop, rotate, affine, perspective, or elastic DA for this stage.
@@ -182,6 +194,25 @@ just cfg-private-curriculum-stage1
 | `ema` | `disabled`, `default` | EMA update/evaluation behavior |
 | `checkpoint` | `default` | last/best/periodic checkpoint policy |
 | `distributed` | `single`, `ddp` | Single-process or torchrun/DDP execution |
+
+## Aux Inference Panels
+
+Use `infer_aux_panel_treeformer.py` for dense aux output inspection. It reads current Hydra checkpoints, including embedded resolved config and EMA shadow weights. With `--weights auto`, EMA weights are preferred.
+
+For direct invocation:
+
+```bash
+PYTHONPATH=. "$TREEFORMER_PYTHON" infer_aux_panel_treeformer.py \
+  --legacy-split-root "$TREEFORMER_PRIVATE_DATA/val" \
+  --checkpoint "$TREEFORMER_AUX_CHECKPOINT" \
+  --output-dir "$TREEFORMER_AUX_PANEL_OUTPUT" \
+  --device cuda \
+  --max-size 128 \
+  --limit 10 \
+  --save-json
+```
+
+The optional JSON summary stores compact scalar statistics only. Generated panels and summaries must stay under `${TREEFORMER_ASSETS_ROOT}` or another repo-external artifact directory.
 
 ## Optimizers
 
