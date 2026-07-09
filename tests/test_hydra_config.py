@@ -122,6 +122,7 @@ def test_hydra_seg_supervised_training_uses_segmentation_only_losses():
     assert cfg.DATA.LEGACY_ROTATE is False
     assert cfg.DATA.FAST_SEGMENTATION_LOADER is True
     assert cfg.DATA.SEG_CACHE_MODE == "none"
+    assert cfg.DATA.AUX_TARGET_MODE == "seg_only"
     assert cfg.checkpoint.metric_name == "val/seg_soft_dice_score"
     assert cfg.checkpoint.mode == "max"
 
@@ -129,3 +130,37 @@ def test_hydra_seg_supervised_training_uses_segmentation_only_losses():
     assert legacy.TRAIN.W_AUX_HEATMAP == 0.0
     assert legacy.TRAIN.W_AUX_PAF == 0.0
     assert legacy.DATA.AUX_DETAIL_SCALES == [1, 2, 4]
+
+
+def test_hydra_seg_only_training_is_pure_segmentation_objective():
+    with initialize_config_dir(version_base="1.3", config_dir=str(CONF_DIR)):
+        cfg = compose(config_name="config", overrides=["train=seg_only"])
+
+    assert cfg.TRAIN.MODE == "aux_supervised"
+    assert cfg.TRAIN.SKIP_GRAPH_OUTPUT is True
+    assert cfg.TRAIN.W_AUX_SEG == 1.0
+    assert cfg.TRAIN.W_AUX_DETAIL == 0.0
+    assert cfg.TRAIN.W_AUX_HEATMAP == 0.0
+    assert cfg.TRAIN.W_AUX_PAF == 0.0
+    assert cfg.DATA.AUX_TARGET_MODE == "seg_only"
+    assert cfg.DATA.FAST_SEGMENTATION_LOADER is True
+    assert cfg.MODEL.GRAPH_OUTPUT_ENABLED is False
+    assert cfg.MODEL.AUX_HEAD.OUT_CHANNELS == 5
+    assert cfg.checkpoint.metric_name == "val/seg_soft_dice_score"
+
+
+def test_hydra_seg_heatmap_training_adds_node_heatmap_objective():
+    with initialize_config_dir(version_base="1.3", config_dir=str(CONF_DIR)):
+        cfg = compose(config_name="config", overrides=["train=seg_heatmap"])
+
+    assert cfg.TRAIN.MODE == "aux_supervised"
+    assert cfg.TRAIN.SKIP_GRAPH_OUTPUT is True
+    assert cfg.TRAIN.W_AUX_SEG == 1.0
+    assert cfg.TRAIN.W_AUX_DETAIL == 0.0
+    assert cfg.TRAIN.W_AUX_HEATMAP == 1.0
+    assert cfg.TRAIN.W_AUX_PAF == 0.0
+    assert cfg.DATA.AUX_TARGET_MODE == "seg_heatmap"
+    assert cfg.DATA.AUX_HEATMAP_SIGMA == 3.0
+    assert cfg.MODEL.GRAPH_OUTPUT_ENABLED is False
+    assert cfg.MODEL.AUX_HEAD.OUT_CHANNELS == 5
+    assert cfg.checkpoint.metric_name == "val/seg_soft_dice_score"

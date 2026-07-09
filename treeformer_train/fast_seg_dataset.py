@@ -13,6 +13,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
+from .aux_map_targets import AuxMapTargetConfig, make_aux_map_target_config, make_aux_map_targets
 from .detail_targets import make_stdc_detail_boundary_target
 
 
@@ -212,6 +213,11 @@ class FastSegSupervisedDataset(Dataset):
         detail_scales: tuple[int, ...] = (1, 2, 4),
         detail_support_kernel_size: int = 3,
         resize_policy: str = "legacy_half",
+        aux_target_mode: str = "seg_only",
+        heatmap_sigma: float = 3.0,
+        heatmap_cutoff: float = 0.01,
+        paf_line_thickness: int = 2,
+        paf_mask_thickness: int = 6,
     ) -> None:
         self.split_root = Path(split_root)
         self.max_size = int(max_size)
@@ -228,6 +234,13 @@ class FastSegSupervisedDataset(Dataset):
         self.resize_policy = str(resize_policy).lower()
         if self.resize_policy not in {"legacy_half", "full"}:
             raise ValueError(f"resize_policy must be one of ['legacy_half', 'full'], got {resize_policy!r}")
+        self.aux_target_config: AuxMapTargetConfig = make_aux_map_target_config(
+            mode=aux_target_mode,
+            heatmap_sigma=heatmap_sigma,
+            heatmap_cutoff=heatmap_cutoff,
+            paf_line_thickness=paf_line_thickness,
+            paf_mask_thickness=paf_mask_thickness,
+        )
         self.detail_config = {
             "threshold": self.detail_threshold,
             "scales": list(self.detail_scales),
@@ -287,9 +300,12 @@ class FastSegSupervisedDataset(Dataset):
             image, segmentation, detail, nodes, edges = self._build_sample(sample)
 
         height, width = int(segmentation.shape[-2]), int(segmentation.shape[-1])
-        pafs = torch.zeros((height, width, 2), dtype=torch.float32)
-        paf_mask = torch.zeros((height, width), dtype=torch.bool)
-        heatmap = torch.zeros((height, width), dtype=torch.float32)
+        pafs, paf_mask, heatmap = make_aux_map_targets(
+            nodes,
+            edges,
+            image_size=(height, width),
+            config=self.aux_target_config,
+        )
         item = (
             image.contiguous(),
             sample.sample_id,

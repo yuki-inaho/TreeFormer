@@ -51,6 +51,7 @@ def test_fast_seg_dataset_returns_legacy_aux_batch_contract(tmp_path: Path):
     assert paf_mask.shape == (32, 40)
     assert segmentation.shape == (32, 40)
     assert heatmap.shape == (32, 40)
+    assert heatmap.max().item() == 0.0
     assert torch.equal(torch.unique(segmentation), torch.tensor([0.0, 1.0]))
 
     batch = custom_collate_fn([dataset[0], dataset[1]])[0]
@@ -58,6 +59,31 @@ def test_fast_seg_dataset_returns_legacy_aux_batch_contract(tmp_path: Path):
     assert batch[3].shape == (2, 2, 32, 40)
     assert batch[5].shape == (2, 1, 32, 40)
     assert batch[6].shape == (2, 1, 32, 40)
+
+
+def test_fast_seg_dataset_can_generate_node_heatmap_targets(tmp_path: Path):
+    split_root = _write_split(tmp_path, "train", count=1)
+    dataset = FastSegSupervisedDataset(split_root, max_size=64, aux_target_mode="seg_heatmap", heatmap_sigma=2.0)
+
+    _image, _sample_id, nodes, _edges, pafs, paf_mask, _segmentation, heatmap, _data_id = dataset[0]
+
+    assert nodes.shape == (2, 2)
+    assert pafs.shape == (32, 40, 2)
+    assert paf_mask.sum().item() == 0
+    assert heatmap.shape == (32, 40)
+    assert heatmap.max().item() > 0.9
+    assert heatmap.sum().item() > 2.0
+
+
+def test_fast_seg_dataset_can_generate_paf_targets_when_enabled(tmp_path: Path):
+    split_root = _write_split(tmp_path, "train", count=1)
+    dataset = FastSegSupervisedDataset(split_root, max_size=64, aux_target_mode="seg_heatmap_paf")
+
+    _image, _sample_id, _nodes, _edges, pafs, paf_mask, _segmentation, heatmap, _data_id = dataset[0]
+
+    assert heatmap.max().item() > 0.9
+    assert pafs.abs().sum().item() > 0.0
+    assert paf_mask.sum().item() > 0
 
 
 def test_fast_seg_dataset_can_resize_from_full_resolution(tmp_path: Path):
@@ -111,6 +137,11 @@ def test_build_train_val_datasets_can_select_fast_seg_loader(tmp_path: Path):
         SEG_CACHE_MODE="none",
         SEG_CACHE_ROOT=str(tmp_path / "cache"),
         SEG_RESIZE_POLICY="legacy_half",
+        AUX_TARGET_MODE="seg_only",
+        AUX_HEATMAP_SIGMA=3.0,
+        AUX_HEATMAP_CUTOFF=0.01,
+        AUX_PAF_LINE_THICKNESS=2,
+        AUX_PAF_MASK_THICKNESS=6,
         AUX_DETAIL_THRESHOLD=0.1,
         AUX_DETAIL_SCALES=[1, 2, 4],
         AUX_DETAIL_SUPPORT_KERNEL_SIZE=3,

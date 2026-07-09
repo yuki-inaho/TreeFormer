@@ -8,7 +8,7 @@ TRAIN:
   WEIGHT_DECAY: 1e-4
   LR_DROP: 100
   CLIP_MAX_NORM: 20.0
-  SAVE_PATH: ${oc.env:TREEFORMER_TRAIN_OUTPUT,${oc.env:TREEFORMER_ASSETS_ROOT,../TreeFormer_assets}/trained_weights_hydra_seg}
+  SAVE_PATH: ${oc.env:TREEFORMER_TRAIN_OUTPUT,${oc.env:TREEFORMER_ASSETS_ROOT,../TreeFormer_assets}/trained_weights_hydra_seg_only}
   VAL_INTERVAL: 1
   SAVE_VAL: false
   LOSSES: []
@@ -26,7 +26,7 @@ TRAIN:
   AUX_SEG_FOCAL_ALPHA: 0.75
   AUX_SEG_FOCAL_GAMMA: 2.0
   AUX_SEG_THRESHOLD: 0.5
-  W_AUX_DETAIL: 0.1
+  W_AUX_DETAIL: 0.0
   W_AUX_DETAIL_BCE: 1.0
   W_AUX_DETAIL_DICE: 1.0
   AUX_DETAIL_THRESHOLD: 0.1
@@ -53,5 +53,5 @@ checkpoint:
   mode: max
   pretrained_strict: false
 log:
-  exp_name: hydra_seg_supervised_smoke
+  exp_name: hydra_seg_only_smoke
   message: Hydra-managed TreeFormer segmentation-only supervised training

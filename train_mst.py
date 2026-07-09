@@ -863,6 +863,11 @@ def build_train_val_datasets(data_config):
         val_cache_dir = os.path.join(cache_root, "val") if cache_root else None
         detail_scales = tuple(int(item) for item in _get_data_attr(data_config, "AUX_DETAIL_SCALES", (1, 2, 4)))
         seg_resize_policy = str(_get_data_attr(data_config, "SEG_RESIZE_POLICY", "legacy_half"))
+        aux_target_mode = str(_get_data_attr(data_config, "AUX_TARGET_MODE", "seg_only"))
+        heatmap_sigma = float(_get_data_attr(data_config, "AUX_HEATMAP_SIGMA", 3.0))
+        heatmap_cutoff = float(_get_data_attr(data_config, "AUX_HEATMAP_CUTOFF", 0.01))
+        paf_line_thickness = int(_get_data_attr(data_config, "AUX_PAF_LINE_THICKNESS", 2))
+        paf_mask_thickness = int(_get_data_attr(data_config, "AUX_PAF_MASK_THICKNESS", 6))
         train_dataset = FastSegSupervisedDataset(
             train_path,
             max_size=data_config.MAX_SIZE,
@@ -872,6 +877,11 @@ def build_train_val_datasets(data_config):
             detail_scales=detail_scales,
             detail_support_kernel_size=int(_get_data_attr(data_config, "AUX_DETAIL_SUPPORT_KERNEL_SIZE", 3)),
             resize_policy=seg_resize_policy,
+            aux_target_mode=aux_target_mode,
+            heatmap_sigma=heatmap_sigma,
+            heatmap_cutoff=heatmap_cutoff,
+            paf_line_thickness=paf_line_thickness,
+            paf_mask_thickness=paf_mask_thickness,
         )
         val_dataset = FastSegSupervisedDataset(
             val_path,
@@ -882,6 +892,11 @@ def build_train_val_datasets(data_config):
             detail_scales=detail_scales,
             detail_support_kernel_size=int(_get_data_attr(data_config, "AUX_DETAIL_SUPPORT_KERNEL_SIZE", 3)),
             resize_policy=seg_resize_policy,
+            aux_target_mode=aux_target_mode,
+            heatmap_sigma=heatmap_sigma,
+            heatmap_cutoff=heatmap_cutoff,
+            paf_line_thickness=paf_line_thickness,
+            paf_mask_thickness=paf_mask_thickness,
         )
         return (
             _limit_dataset(train_dataset, _get_data_attr(data_config, "TRAIN_LIMIT")),
