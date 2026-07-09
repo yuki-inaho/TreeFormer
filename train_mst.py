@@ -162,7 +162,7 @@ def load_detr_dataset(tgt_data_path):
 #########################################################################################################
 class LoadCNNDataset(Dataset):
     def __init__(self, parent_path, max_size=1000,
-                 max_change_light_rate=0.3, is_train=True, is_rotate=False):
+                 max_change_light_rate=0.3, is_train=True, is_rotate=False, sample_transform=None):
         self.parent_path = parent_path
         self.tgt_data_path = os.path.join(parent_path, "data")
         self.img_path = os.path.join(parent_path, "img")
@@ -178,6 +178,7 @@ class LoadCNNDataset(Dataset):
         self.max_change_light_rate = max_change_light_rate
         self.is_train = is_train
         self.is_rotate = is_rotate
+        self.sample_transform = sample_transform
 
 
     @property
@@ -579,12 +580,24 @@ class LoadCNNDataset(Dataset):
         plt_img = plt.imread(os.path.join(self.img_path, feature_img_name)).astype(np.float32)
         if len(plt_img.shape) == 3 and plt_img.shape[2] == 4:
             plt_img = plt_img[:, :, :3]  # 最后一层为阿尔法 透明度全是1
-        height, width, channels = plt_img.shape
+        input_img = copy.deepcopy(plt_img)
+        if self.sample_transform is not None:
+            from treeformer_train.augmentations import as_graph_sample
 
+            sample = as_graph_sample(
+                input_img,
+                list_DETR_points_left_up_idx.detach().cpu().numpy(),
+                list_DETR_node_collections_idx.detach().cpu().numpy(),
+            )
+            sample = self.sample_transform(sample)
+            input_img = sample.image
+            list_DETR_points_left_up_idx = torch.tensor(sample.nodes, dtype=torch.float)
+            list_DETR_node_collections_idx = torch.tensor(sample.edges, dtype=torch.long)
+
+        height, width, channels = input_img.shape
         nodes_list = list_DETR_points_left_up_idx * torch.tensor([width, height])
         nodes_list = nodes_list.numpy()
 
-        input_img = copy.deepcopy(plt_img)
         if self.is_train:
             result_list = self._augment_one_sample(input_img, nodes_list)
             feature_img, nodes = result_list[1], result_list[2]
@@ -767,8 +780,12 @@ def build_train_val_datasets(data_config):
         )
 
     train_path, val_path = resolve_train_val_paths(data_config)
+    from treeformer_train.augmentations import build_graph_augmentation
+
+    train_sample_transform = build_graph_augmentation(_get_data_attr(data_config, "AUGMENTATION", None))
+    legacy_rotate = bool(_get_data_attr(data_config, "LEGACY_ROTATE", True))
     train_dataset = LoadCNNDataset(parent_path=train_path, max_size=data_config.MAX_SIZE, max_change_light_rate=0.3,
-                                   is_train=False, is_rotate=True)
+                                   is_train=False, is_rotate=legacy_rotate, sample_transform=train_sample_transform)
     val_dataset = LoadCNNDataset(parent_path=val_path, max_size=data_config.MAX_SIZE, max_change_light_rate=0.3,
                                  is_train=False, is_rotate=False)
     return (

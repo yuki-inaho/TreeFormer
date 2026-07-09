@@ -19,6 +19,8 @@ def test_hydra_default_config_composes_and_preserves_legacy_sections():
     assert cfg.optimizer.name == "adamw_step"
     assert cfg.tensorboard.enabled is True
     assert cfg.checkpoint.metric_name == "val/smd"
+    assert cfg.DATA.AUGMENTATION.enabled is False
+    assert cfg.DATA.LEGACY_ROTATE is True
 
     legacy = make_legacy_config(cfg)
     assert legacy.DATA.DATASET == "guyot-2D"
@@ -34,3 +36,15 @@ def test_hydra_muon_schedulefree_override_is_explicit():
     assert resolved["ema"]["enabled"] is True
     assert resolved["TRAIN"]["EPOCHS"] == 0
     assert "bias" in resolved["optimizer"]["aux_keywords"]
+
+
+def test_hydra_regularized_augmentation_override_is_explicit():
+    with initialize_config_dir(version_base="1.3", config_dir=str(CONF_DIR)):
+        cfg = compose(config_name="config", overrides=["augmentation=regularized"])
+
+    assert cfg.DATA.AUGMENTATION.enabled is True
+    assert cfg.DATA.AUGMENTATION.photometric.backend == "albumentationsx"
+    assert cfg.DATA.LEGACY_ROTATE is False
+
+    legacy = make_legacy_config(cfg)
+    assert legacy.DATA.AUGMENTATION.photometric.allow_fallback is True

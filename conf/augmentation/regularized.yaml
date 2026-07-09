@@ -1,0 +1,30 @@
+# @package _global_
+DATA:
+  LEGACY_ROTATE: false
+  AUGMENTATION:
+    enabled: true
+    seed: ${DATA.SEED}
+    photometric:
+      enabled: true
+      backend: albumentationsx
+      allow_fallback: true
+      p: 0.85
+      brightness_contrast_p: 0.35
+      hsv_p: 0.25
+      gamma_p: 0.25
+      noise_p: 0.20
+      blur_p: 0.15
+    affine:
+      enabled: true
+      p: 0.35
+      max_rotate_deg: 8.0
+      max_translate_frac: 0.035
+      scale_range: [0.96, 1.04]
+      keep_all_nodes_inside: true
+    elastic:
+      enabled: true
+      p: 0.20
+      alpha_frac: 0.018
+      sigma_frac: 0.035
+      grid_size: 4
+      keep_all_nodes_inside: true

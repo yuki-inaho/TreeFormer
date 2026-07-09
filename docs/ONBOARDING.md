@@ -21,7 +21,8 @@
 - `DATA.DATA_PATH` / `TRAIN.SAVE_PATH` などの config path を優先し、古い hard-coded dataset path に戻さない。
 - 学習入力は現行 TreeFormer と同様に RGB 画像を主入力とする。RGB-D 由来データであっても、TreeFormer 側の dataset には RGB 画像と 2D graph annotation を渡す。
 - smoke training は完了済みだが、full training の完走は未保証。full training を開始する場合は別途実行計画とログ保存方針を決める。
-- private legacy TreeFormer-format dataset で GPU smoke を行う場合は、dataset root を `TREEFORMER_PRIVATE_DATA` 環境変数で渡し、`just cfg-private-pretrained-gpu-batch12` で構成だけ確認してから `just smoke-private-pretrained-gpu-batch12` を実行する。batch size は 12 を初期値とし、EMA は GPU 上で保持する。
+- private legacy TreeFormer-format dataset で GPU smoke を行う場合は、dataset root を `TREEFORMER_PRIVATE_DATA` 環境変数で渡し、`just cfg-private-pretrained-gpu-batch12` で構成だけ確認してから `just smoke-private-pretrained-gpu-batch12` を実行する。batch size は 12 を初期値とし、smoke recipe は `DATA.TRAIN_LIMIT=24` / `DATA.VAL_LIMIT=12` を明示する。EMA は GPU 上で保持する。
+- regularized DA を使う場合は `augmentation=regularized` または `just smoke-private-pretrained-gpu-batch12-aug` を使う。光学系 DA は image-only、affine / elastic DA は RGB image と normalized node coordinates を同一 transform から同期更新する。edge topology は維持し、node が画像外へ出る transform は sample 単位で reject する。
 - batch size 12 の VRAM 目安: RTX A4500 / `DATA.MAX_SIZE=128` / official fork-source `grapevein/checkpoint_ours.pkl` / Muon + ScheduleFree 条件で、1 train batch の既存実測は約 3.1GiB。GPU EMA は model state 約 210MiB を shadow と validation backup に使うため、`ema=default` の運用目安は約 3.5-4.0GiB。8GiB 予算では batch size 12 を初期値としてよい。`nvidia-smi` の GPU 全体使用量は他プロセスを含むため、TreeFormer 単体の VRAM 目安と混同しない。
 - CUDA ops の検証は `MultiScaleDeformableAttention` module import と forward double / float check を基準にする。`models/ops/test.py` 全体は high-channel `gradcheck` まで実行するストレステストで、20GB GPU でも OOM し得るため、full test OOM を通常学習 1 batch の OOM と混同しない。
 
@@ -41,6 +42,7 @@
 | 既知課題リスト | `temp/workdoc_Jul08-2026_treeformer_guyot_pipeline.md` | residual risk、未実施事項、lint分類を参照 |
 | pretrained weights | `${TREEFORMER_ASSETS_ROOT}/pretrained_weights/fork_source_main/` | フォーク元 README の Google Drive から取得した checkpoint。repo 外管理 |
 | Hydra training | `docs/HYDRA_TRAINING.md` | Hydra entrypoint、EMA、TensorBoard、checkpoint、Muon + ScheduleFree optimizer の運用 |
+| Augmentation module | `treeformer_train/augmentations/` | AlbumentationsX/OpenCV 光学 DA と graph-aware affine / elastic DA。dataset 本体へ直書きしないための composable transform 層 |
 
 ## 4. タスク境界（任せること / 任せないこと）
 
@@ -48,12 +50,14 @@
 
 - Guyot loader / adapter の contract を保った小さな修正。
 - smoke training config、dry-run config、pytest の保守。
+- augmentation config と transform contract の保守。geometry DA は必ず image と node coordinates を同期する。
 - full training を開始する前の事前検証、ログ設計、checkpoint 保存先確認。
 - README / docs / workdoc への実行手順追記。
 
 ### 任せないタスク（例）
 
 - 明示指示なしの full training 長時間実行。
+- 画像だけを geometry 変形して graph annotation を更新しない変更。
 - repo 内への dataset / checkpoint / `.tar.gz` / `.pkl` / `.npz` 追加。
 - private dataset の実パス、生成コマンド、内部由来が分かる名前の docs 追記。
 - 既存 training loop、loss、model architecture の大規模変更。
@@ -74,6 +78,7 @@
 2. `configs/tree_2D_guyot_train_smoke.yaml` を読み、`DATA.TRAIN_LIMIT: 1`、`DATA.VAL_LIMIT: 1`、repo 外 `TRAIN.SAVE_PATH` が設定されていることを説明する。
 3. `PYTHONPATH=. "$TREEFORMER_PYTHON" train_hydra.py --cfg job` を実行し、Hydra config が合成できることを確認する。
 4. `git status --ignored --short` で checkpoint / dataset / cache が repo に混入していないことを確認し、残る ignored artifact が CUDA build artifact だけかを報告する。
+5. `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. "$TREEFORMER_PYTHON" -m pytest -p no:cacheprovider tests/test_graph_augmentations.py -q` を実行し、augmentation contract が通ることを確認する。
 
 ## 7. 運用ルール・変更管理
 

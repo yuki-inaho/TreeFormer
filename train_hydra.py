@@ -77,6 +77,11 @@ def _build_dataloaders(legacy_config: Any, distributed_context: Any) -> tuple[Da
         num_workers=num_workers,
         sampler=valid_sampler,
     )
+    if len(train_loader) == 0:
+        raise ValueError(
+            "training dataloader has zero batches; increase DATA.TRAIN_LIMIT, use a larger training split, "
+            "or reduce DATA.BATCH_SIZE"
+        )
     return train_loader, val_loader
 
 

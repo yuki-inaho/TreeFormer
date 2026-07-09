@@ -1,5 +1,6 @@
 defaults:
   - data: guyot_smoke
+  - augmentation: disabled
   - model: treeformer_2d
   - train: default
   - optimizer: adamw_step

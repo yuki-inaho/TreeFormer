@@ -31,12 +31,15 @@ export TREEFORMER_PRIVATE_DATA=<legacy_treeformer_dataset_root>
 
 just cfg-private-pretrained-gpu-batch12
 just smoke-private-pretrained-gpu-batch12
+just cfg-private-pretrained-gpu-batch12-aug
+just smoke-private-pretrained-gpu-batch12-aug
 ```
 
 The prepared smoke template uses:
 
 - GPU training: `runtime.device=cuda`
 - batch size: `DATA.BATCH_SIZE=12`
+- smoke limits: `DATA.TRAIN_LIMIT=24`, `DATA.VAL_LIMIT=12`
 - image/graph size cap: `DATA.MAX_SIZE=128`
 - optimizer: `optimizer=muon_schedulefree`
 - EMA: `ema=default`, with `ema.device=null`, so EMA shadow weights stay on GPU
@@ -47,11 +50,46 @@ The prepared smoke template uses:
 
 With `ema=default`, EMA shadow weights and EMA validation stay on GPU. On RTX A4500, batch size 12 with `DATA.MAX_SIZE=128` used about 3.1GiB for the measured train step; the practical estimate with GPU EMA is about 3.5-4.0GiB. `nvidia-smi` reports total GPU memory across all processes, so separate concurrent jobs must be excluded before treating it as TreeFormer-only VRAM.
 
+## Augmentation
+
+Use `augmentation=regularized` for the reusable DA path. It is disabled by default to preserve the legacy baseline.
+
+The augmentation code is split by contract:
+
+- photometric transforms are image-only and leave graph nodes / edges unchanged.
+- affine and elastic transforms update the RGB image and normalized node coordinates from the same transform field.
+- edge topology is preserved; transforms that would move any node outside the image are rejected for that sample.
+
+`augmentation=regularized` also sets `DATA.LEGACY_ROTATE=false`, so geometry regularization is owned by the graph-aware augmentation module instead of stacking on top of the legacy always-rotate path.
+
+Photometric backend selection:
+
+- `backend=albumentationsx` tries to import the AlbumentationsX-compatible `albumentations` module.
+- `allow_fallback=true` falls back to the OpenCV implementation when AlbumentationsX is unavailable.
+- `backend=opencv` uses the portable in-repo OpenCV implementation only.
+
+AlbumentationsX is optional because it has a separate dual-license model and can require platform-specific binary dependencies. To enable that backend in the active venv:
+
+```bash
+uv pip install --python "$TREEFORMER_PYTHON" 'albumentationsx>=2.3,<3.0'
+```
+
+For a short GPU smoke run with pretrained weights and DA:
+
+```bash
+export TREEFORMER_PRIVATE_DATA=<legacy_treeformer_dataset_root>
+just cfg-private-pretrained-gpu-batch12-aug
+just smoke-private-pretrained-gpu-batch12-aug
+```
+
+The smoke recipe runs 3 epochs with batch size 12, GPU EMA, TensorBoard, Muon + ScheduleFree, and repo-external output paths. Keep the dataset root in the environment variable and out of committed docs.
+
 ## Config groups
 
 | Group | Files | Purpose |
 |---|---|---|
 | `data` | `guyot_smoke`, `guyot_full` | Guyot dataset paths, limits, workers, seed |
+| `augmentation` | `disabled`, `regularized` | Image-only photometric DA and graph-aware affine / elastic DA |
 | `model` | `treeformer_2d` | Existing 2D TreeFormer architecture settings |
 | `train` | `default`, `dry_run` | Epochs, loss weights, LR, save path |
 | `optimizer` | `adamw_step`, `schedulefree_adamw`, `muon_schedulefree` | Optimizer and scheduler selection |
