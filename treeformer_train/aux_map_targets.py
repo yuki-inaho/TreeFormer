@@ -14,6 +14,7 @@ class AuxMapTargetConfig:
     mode: str = "seg_only"
     heatmap_sigma: float = 3.0
     heatmap_cutoff: float = 0.01
+    heatmap_target_stride: int = 1
     paf_line_thickness: int = 2
     paf_mask_thickness: int = 6
     direction_target_source: str = "graph_edges"
@@ -53,6 +54,7 @@ def make_aux_map_target_config(
     mode: str | None = None,
     heatmap_sigma: float = 3.0,
     heatmap_cutoff: float = 0.01,
+    heatmap_target_stride: int = 1,
     paf_line_thickness: int = 2,
     paf_mask_thickness: int = 6,
     direction_target_source: str = "graph_edges",
@@ -60,6 +62,11 @@ def make_aux_map_target_config(
     direction_tangent_radius: int = 8,
     direction_junction_exclusion_radius: int = 6,
 ) -> AuxMapTargetConfig:
+    if int(heatmap_target_stride) < 1:
+        raise ValueError(
+            "AUX_HEATMAP_TARGET_STRIDE must be a positive integer, "
+            f"got {heatmap_target_stride}"
+        )
     direction_target_source = str(direction_target_source).lower().replace("-", "_")
     if direction_target_source not in {"graph_edges", "mask_skeleton"}:
         raise ValueError(
@@ -85,6 +92,7 @@ def make_aux_map_target_config(
         mode=normalize_aux_target_mode(mode),
         heatmap_sigma=float(heatmap_sigma),
         heatmap_cutoff=float(heatmap_cutoff),
+        heatmap_target_stride=int(heatmap_target_stride),
         paf_line_thickness=int(paf_line_thickness),
         paf_mask_thickness=int(paf_mask_thickness),
         direction_target_source=direction_target_source,
@@ -92,6 +100,16 @@ def make_aux_map_target_config(
         direction_tangent_radius=int(direction_tangent_radius),
         direction_junction_exclusion_radius=int(direction_junction_exclusion_radius),
     )
+
+
+def heatmap_target_size(image_size: tuple[int, int], *, stride: int) -> tuple[int, int]:
+    """Return the native heatmap grid size for an image-space target stride."""
+
+    height, width = image_size
+    stride = int(stride)
+    if stride < 1:
+        raise ValueError(f"heatmap target stride must be positive, got {stride}")
+    return ((int(height) + stride - 1) // stride, (int(width) + stride - 1) // stride)
 
 
 def make_node_heatmap(
@@ -217,12 +235,12 @@ def make_aux_map_targets(
     height, width = image_size
     paf = torch.zeros((height, width, 2), dtype=torch.float32)
     paf_mask = torch.zeros((height, width), dtype=torch.bool)
-    heatmap = torch.zeros((height, width), dtype=torch.float32)
+    heatmap = torch.zeros(heatmap_target_size(image_size, stride=config.heatmap_target_stride), dtype=torch.float32)
 
     if config.trains_heatmap:
         heatmap = make_node_heatmap(
             nodes,
-            image_size,
+            tuple(heatmap.shape),
             sigma=config.heatmap_sigma,
             cutoff=config.heatmap_cutoff,
         )

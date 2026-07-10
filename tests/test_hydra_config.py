@@ -191,10 +191,21 @@ def test_hydra_default_config_composes_and_preserves_legacy_sections():
     assert cfg.runtime.compile.aux_loss is False
     assert cfg.runtime.amp.enabled is False
     assert cfg.runtime.amp.dtype == "float16"
+    assert cfg.MODEL.AUX_HEAD.DECODER_STRIDE == 4
 
     legacy = make_legacy_config(cfg)
     assert legacy.DATA.DATASET == "guyot-2D"
     assert legacy.TRAIN.LOSSES == ["boxes", "class", "cards", "nodes", "edges"]
+
+
+def test_native_stride4_heatmap_ablation_composes_explicit_target_contract():
+    with initialize_config_dir(version_base="1.3", config_dir=str(CONF_DIR)):
+        cfg = compose(config_name="config", overrides=["train=seg_heatmap_paf", "+ablation=heatmap_native_stride4"])
+
+    assert cfg.DATA.AUX_HEATMAP_TARGET_STRIDE == 4
+    assert cfg.DATA.AUX_HEATMAP_SIGMA == 1.0
+    assert cfg.MODEL.AUX_HEAD.DECODER_STRIDE == 4
+    assert cfg.TRAIN.W_AUX_HEATMAP_COORD == 0.0
 
 
 def test_hydra_muon_schedulefree_override_is_explicit():

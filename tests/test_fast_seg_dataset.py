@@ -82,6 +82,26 @@ def test_fast_seg_dataset_can_generate_node_heatmap_targets(tmp_path: Path):
     assert heatmap.sum().item() > 2.0
 
 
+def test_fast_seg_dataset_can_generate_stride4_native_node_heatmap_targets(tmp_path: Path):
+    split_root = _write_split(tmp_path, "train", count=2)
+    dataset = FastSegSupervisedDataset(
+        split_root,
+        max_size=64,
+        aux_target_mode="seg_heatmap",
+        heatmap_sigma=1.0,
+        heatmap_target_stride=4,
+    )
+
+    _image, _sample_id, _nodes, _edges, _pafs, _paf_mask, segmentation, heatmap, _data_id = dataset[0]
+
+    assert segmentation.shape == (32, 40)
+    assert heatmap.shape == (8, 10)
+    assert heatmap.max().item() > 0.9
+    batch = custom_collate_fn([dataset[0], dataset[1]])[0]
+    assert batch[5].shape == (2, 1, 32, 40)
+    assert batch[6].shape == (2, 1, 8, 10)
+
+
 def test_fast_seg_dataset_can_generate_paf_targets_when_enabled(tmp_path: Path):
     split_root = _write_split(tmp_path, "train", count=1)
     dataset = FastSegSupervisedDataset(split_root, max_size=64, aux_target_mode="seg_heatmap_paf")
@@ -233,7 +253,7 @@ def test_fast_seg_cache_omits_unused_detail_boundary_payload(tmp_path: Path):
     build_fast_seg_cache(split_root=split_root, cache_dir=cache_dir, max_size=64)
 
     payload = torch.load(next(cache_dir.glob("*.pt")), map_location="cpu", weights_only=False)
-    assert payload["cache_format_version"] == 3
+    assert payload["cache_format_version"] == 4
     assert "detail_boundary" not in payload
 
     none_dataset = FastSegSupervisedDataset(split_root, max_size=64, cache_mode="none")
@@ -269,6 +289,7 @@ def test_build_train_val_datasets_can_select_fast_seg_loader(tmp_path: Path):
         AUX_TARGET_MODE="seg_only",
         AUX_HEATMAP_SIGMA=3.0,
         AUX_HEATMAP_CUTOFF=0.01,
+        AUX_HEATMAP_TARGET_STRIDE=1,
         AUX_PAF_LINE_THICKNESS=2,
         AUX_PAF_MASK_THICKNESS=6,
         AUX_DIRECTION_TARGET_SOURCE="graph_edges",

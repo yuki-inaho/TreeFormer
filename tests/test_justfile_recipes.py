@@ -55,3 +55,11 @@ def test_segmentation_only_recipes_keep_using_seg_cache_root():
     body = _recipe_body("train-private-seg-supervised")
 
     assert "{{seg_cache_root}}" in body
+
+
+def test_native_heatmap_recipe_uses_stride4_target_generation():
+    body = _recipe_body("cache-private-native-heatmap-stride4")
+
+    assert "{{native_heatmap_cache_root}}" in body
+    assert "--heatmap-target-stride 4" in body
+    assert "--heatmap-sigma 1.0" in body

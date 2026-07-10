@@ -1088,6 +1088,7 @@ def build_train_val_datasets(data_config):
         aux_target_mode = str(_get_data_attr(data_config, "AUX_TARGET_MODE", "seg_only"))
         heatmap_sigma = float(_get_data_attr(data_config, "AUX_HEATMAP_SIGMA", 3.0))
         heatmap_cutoff = float(_get_data_attr(data_config, "AUX_HEATMAP_CUTOFF", 0.01))
+        heatmap_target_stride = int(_get_data_attr(data_config, "AUX_HEATMAP_TARGET_STRIDE", 1))
         paf_line_thickness = int(_get_data_attr(data_config, "AUX_PAF_LINE_THICKNESS", 2))
         paf_mask_thickness = int(_get_data_attr(data_config, "AUX_PAF_MASK_THICKNESS", 6))
         direction_target_source = str(_get_data_attr(data_config, "AUX_DIRECTION_TARGET_SOURCE", "graph_edges"))
@@ -1105,6 +1106,7 @@ def build_train_val_datasets(data_config):
             aux_target_mode=aux_target_mode,
             heatmap_sigma=heatmap_sigma,
             heatmap_cutoff=heatmap_cutoff,
+            heatmap_target_stride=heatmap_target_stride,
             paf_line_thickness=paf_line_thickness,
             paf_mask_thickness=paf_mask_thickness,
             direction_target_source=direction_target_source,
@@ -1123,6 +1125,7 @@ def build_train_val_datasets(data_config):
             aux_target_mode=aux_target_mode,
             heatmap_sigma=heatmap_sigma,
             heatmap_cutoff=heatmap_cutoff,
+            heatmap_target_stride=heatmap_target_stride,
             paf_line_thickness=paf_line_thickness,
             paf_mask_thickness=paf_mask_thickness,
             direction_target_source=direction_target_source,

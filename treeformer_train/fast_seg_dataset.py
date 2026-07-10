@@ -18,7 +18,7 @@ from .virtual_root import load_forest_metadata
 
 
 IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp")
-CACHE_FORMAT_VERSION = 3
+CACHE_FORMAT_VERSION = 4
 
 
 @dataclass(frozen=True)
@@ -156,6 +156,7 @@ def _cache_config(*, resize_policy: str, aux_target_config: AuxMapTargetConfig) 
             "mode": aux_target_config.mode,
             "heatmap_sigma": aux_target_config.heatmap_sigma,
             "heatmap_cutoff": aux_target_config.heatmap_cutoff,
+            "heatmap_target_stride": aux_target_config.heatmap_target_stride,
             "paf_line_thickness": aux_target_config.paf_line_thickness,
             "paf_mask_thickness": aux_target_config.paf_mask_thickness,
             "direction_target_source": aux_target_config.direction_target_source,
@@ -187,6 +188,7 @@ def build_fast_seg_cache(
     aux_target_mode: str = "seg_only",
     heatmap_sigma: float = 3.0,
     heatmap_cutoff: float = 0.01,
+    heatmap_target_stride: int = 1,
     paf_line_thickness: int = 2,
     paf_mask_thickness: int = 6,
     direction_target_source: str = "graph_edges",
@@ -203,6 +205,7 @@ def build_fast_seg_cache(
         mode=aux_target_mode,
         heatmap_sigma=heatmap_sigma,
         heatmap_cutoff=heatmap_cutoff,
+        heatmap_target_stride=heatmap_target_stride,
         paf_line_thickness=paf_line_thickness,
         paf_mask_thickness=paf_mask_thickness,
         direction_target_source=direction_target_source,
@@ -270,6 +273,7 @@ class FastSegSupervisedDataset(Dataset):
         aux_target_mode: str = "seg_only",
         heatmap_sigma: float = 3.0,
         heatmap_cutoff: float = 0.01,
+        heatmap_target_stride: int = 1,
         paf_line_thickness: int = 2,
         paf_mask_thickness: int = 6,
         direction_target_source: str = "graph_edges",
@@ -297,6 +301,7 @@ class FastSegSupervisedDataset(Dataset):
             mode=aux_target_mode,
             heatmap_sigma=heatmap_sigma,
             heatmap_cutoff=heatmap_cutoff,
+            heatmap_target_stride=heatmap_target_stride,
             paf_line_thickness=paf_line_thickness,
             paf_mask_thickness=paf_mask_thickness,
             direction_target_source=direction_target_source,
@@ -431,6 +436,7 @@ def main() -> None:
     parser.add_argument("--aux-target-mode", default="seg_only")
     parser.add_argument("--heatmap-sigma", type=float, default=3.0)
     parser.add_argument("--heatmap-cutoff", type=float, default=0.01)
+    parser.add_argument("--heatmap-target-stride", type=int, default=1)
     parser.add_argument("--paf-line-thickness", type=int, default=2)
     parser.add_argument("--paf-mask-thickness", type=int, default=6)
     parser.add_argument("--direction-target-source", choices=["graph_edges", "mask_skeleton"], default="graph_edges")
@@ -453,6 +459,7 @@ def main() -> None:
             aux_target_mode=str(args.aux_target_mode),
             heatmap_sigma=float(args.heatmap_sigma),
             heatmap_cutoff=float(args.heatmap_cutoff),
+            heatmap_target_stride=int(args.heatmap_target_stride),
             paf_line_thickness=int(args.paf_line_thickness),
             paf_mask_thickness=int(args.paf_mask_thickness),
             direction_target_source=str(args.direction_target_source),

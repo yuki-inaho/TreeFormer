@@ -63,7 +63,15 @@ class AuxLossWeights:
 
 
 AuxLossCore = Callable[
-    [torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, "torch.Tensor | None"],
+    [
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        "torch.Tensor | None",
+    ],
     dict[str, torch.Tensor],
 ]
 
@@ -524,6 +532,7 @@ def _direction_angular_loss(prediction: torch.Tensor, target: torch.Tensor, vali
 
 def _compute_aux_loss_terms(
     aux_maps: torch.Tensor,
+    heatmap_logits: torch.Tensor,
     seg_target: torch.Tensor,
     heatmap_target: torch.Tensor,
     paf_target: torch.Tensor,
@@ -532,7 +541,6 @@ def _compute_aux_loss_terms(
     detail_target: torch.Tensor | None = None,
 ) -> dict[str, torch.Tensor]:
     seg_logits = _resize_like(aux_maps[:, 0:1], seg_target)
-    heatmap_logits = _resize_like(aux_maps[:, 1:2], heatmap_target)
     paf_pred = _resize_like(aux_maps[:, 2:4], paf_target)
 
     seg_pos_weight = _segmentation_pos_weight(seg_target, weights)
@@ -680,6 +688,7 @@ def _compute_aux_loss_terms(
 def make_aux_loss_core(weights: AuxLossWeights) -> AuxLossCore:
     def _core(
         aux_maps: torch.Tensor,
+        heatmap_logits: torch.Tensor,
         seg_target: torch.Tensor,
         heatmap_target: torch.Tensor,
         paf_target: torch.Tensor,
@@ -687,7 +696,7 @@ def make_aux_loss_core(weights: AuxLossWeights) -> AuxLossCore:
         detail_target: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
         return _compute_aux_loss_terms(
-            aux_maps, seg_target, heatmap_target, paf_target, paf_mask, weights, detail_target
+            aux_maps, heatmap_logits, seg_target, heatmap_target, paf_target, paf_mask, weights, detail_target
         )
 
     return _core
@@ -724,6 +733,44 @@ def build_aux_loss_computer(
     return AuxLossComputer(weights=weights, core=core)
 
 
+def _select_heatmap_logits(
+    output: dict[str, torch.Tensor],
+    aux_maps: torch.Tensor,
+    seg_target: torch.Tensor,
+    heatmap_target: torch.Tensor,
+) -> torch.Tensor:
+    """Select direct native logits when the target is native-grid sized.
+
+    Legacy checkpoints only expose ``aux_maps`` at image resolution, which is
+    valid only for image-resolution heatmap targets.  A smaller target is an
+    explicit stride-native contract and must be paired with the decoder's
+    ``aux_heatmap_native`` output rather than silently supervising an
+    interpolated legacy map.
+    """
+
+    native_logits = output.get("aux_heatmap_native")
+    target_size = tuple(int(item) for item in heatmap_target.shape[-2:])
+    seg_size = tuple(int(item) for item in seg_target.shape[-2:])
+    if native_logits is None:
+        if target_size != seg_size:
+            raise KeyError(
+                "native-grid heatmap targets require model output 'aux_heatmap_native'; "
+                "set MODEL.AUX_HEAD.DECODER_STRIDE=4 and use the native aux head"
+            )
+        return _resize_like(aux_maps[:, 1:2], heatmap_target)
+    if native_logits.ndim != 4 or native_logits.shape[1] != 1:
+        raise ValueError(
+            "aux_heatmap_native must be [N,1,H,W], "
+            f"got shape {tuple(native_logits.shape)}"
+        )
+    if native_logits.shape[0] != heatmap_target.shape[0]:
+        raise ValueError(
+            "aux_heatmap_native batch size does not match heatmap target: "
+            f"{native_logits.shape[0]} != {heatmap_target.shape[0]}"
+        )
+    return _resize_like(native_logits, heatmap_target)
+
+
 def compute_aux_losses(
     output: dict[str, torch.Tensor],
     targets: dict[str, torch.Tensor],
@@ -744,6 +791,7 @@ def compute_aux_losses(
     heatmap_target = targets["heatmap"]
     paf_target = targets["paf"]
     paf_mask = targets["paf_mask"].to(dtype=torch.float32)
+    heatmap_logits = _select_heatmap_logits(output, aux_maps, seg_target, heatmap_target)
 
     # Build the detail target only when the caller has not already shared one.
     # compute_aux_eval_metrics creates it first so its loss and metric paths reuse
@@ -758,8 +806,17 @@ def compute_aux_losses(
         )
 
     if loss_core is not None:
-        return loss_core(aux_maps, seg_target, heatmap_target, paf_target, paf_mask, detail_target)
-    return _compute_aux_loss_terms(aux_maps, seg_target, heatmap_target, paf_target, paf_mask, weights, detail_target)
+        return loss_core(aux_maps, heatmap_logits, seg_target, heatmap_target, paf_target, paf_mask, detail_target)
+    return _compute_aux_loss_terms(
+        aux_maps,
+        heatmap_logits,
+        seg_target,
+        heatmap_target,
+        paf_target,
+        paf_mask,
+        weights,
+        detail_target,
+    )
 
 
 def _heatmap_peak_detection_metrics(
@@ -870,7 +927,7 @@ def compute_aux_eval_metrics(
     paf_mask = targets["paf_mask"].to(dtype=torch.float32)
 
     seg_logits = _resize_like(aux_maps[:, 0:1], seg_target)
-    heatmap_logits = _resize_like(aux_maps[:, 1:2], heatmap_target)
+    heatmap_logits = _select_heatmap_logits(output, aux_maps, seg_target, heatmap_target)
     paf_pred = _resize_like(aux_maps[:, 2:4], paf_target)
 
     seg_probabilities = torch.sigmoid(seg_logits)
@@ -893,12 +950,24 @@ def compute_aux_eval_metrics(
     heatmap_weight = _heatmap_loss_weight(seg_target, heatmap_target, weights)
     masked_heatmap_mae = heatmap_mae if heatmap_weight is None else _weighted_mean(heatmap_abs_error, heatmap_weight)
     heatmap_probabilities = torch.sigmoid(heatmap_logits)
-    heatmap_peak_mask = heatmap_target >= weights.heatmap_focal_pos_threshold
+    heatmap_peak_mask = torch.zeros_like(heatmap_target, dtype=torch.bool)
+    target_peak_indices = _extract_target_peak_indices(
+        heatmap_target,
+        min_target=weights.heatmap_peak_min_target,
+    )
+    if target_peak_indices.shape[0] > 0:
+        heatmap_peak_mask[
+            target_peak_indices[:, 0],
+            0,
+            target_peak_indices[:, 1],
+            target_peak_indices[:, 2],
+        ] = True
     heatmap_peak_weight = heatmap_peak_mask.to(dtype=heatmap_probabilities.dtype)
     if heatmap_weight is not None:
         heatmap_peak_weight = heatmap_peak_weight * heatmap_weight
+    heatmap_segmentation = _resize_like(seg_target, heatmap_target)
     heatmap_nonpeak_foreground_mask = torch.logical_and(
-        seg_target > 0.5,
+        heatmap_segmentation > 0.5,
         heatmap_target < weights.heatmap_ridge_threshold,
     )
     heatmap_peak_mean = _weighted_mean(heatmap_probabilities, heatmap_peak_weight)

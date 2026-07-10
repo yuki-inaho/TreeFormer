@@ -1,0 +1,28 @@
+# @package _global_
+# First native-grid comparison: keep the output representation simple.  The
+# heatmap target is generated on the stride-4 decoder grid and heatmap logits
+# branch directly from that decoder; no NMS or offset head is enabled here.
+TRAIN:
+  W_AUX_SEG: 1.0
+  W_AUX_HEATMAP: 1.0
+  W_AUX_HEATMAP_MSE: 0.25
+  W_AUX_HEATMAP_FOCAL: 1.0
+  AUX_HEATMAP_FOCAL_ALPHA: 2.0
+  AUX_HEATMAP_FOCAL_BETA: 4.0
+  AUX_HEATMAP_FOCAL_POS_SOURCE: target_peaks
+  W_AUX_HEATMAP_RIDGE: 0.05
+  AUX_HEATMAP_RIDGE_THRESHOLD: 0.05
+  W_AUX_HEATMAP_COORD: 0.0
+  W_AUX_HEATMAP_COORD_VAR: 0.0
+  W_AUX_HEATMAP_PEAK: 0.0
+  AUX_HEATMAP_EVAL_PEAK_THRESHOLD: 0.25
+  AUX_HEATMAP_EVAL_MATCH_RADIUS: 1.5
+DATA:
+  AUX_HEATMAP_SIGMA: 1.0
+  AUX_HEATMAP_TARGET_STRIDE: 4
+MODEL:
+  AUX_HEAD:
+    DECODER_STRIDE: 4
+log:
+  exp_name: ${oc.env:TREEFORMER_EXP_NAME,ablate_heatmap_native_stride4}
+  message: "Heatmap ablation: direct stride-4 decoder heatmap supervision"

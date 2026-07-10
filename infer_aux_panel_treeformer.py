@@ -245,6 +245,22 @@ def resize_aux_maps(aux_maps: torch.Tensor, target_size: tuple[int, int]) -> tor
     return F.interpolate(aux_maps, size=target_size, mode="bilinear", align_corners=False)
 
 
+def resize_scalar_map(values: torch.Tensor, target_size: tuple[int, int]) -> torch.Tensor:
+    """Resize a scalar map for display without changing its training contract."""
+
+    if values.ndim == 2:
+        batched = values.unsqueeze(0).unsqueeze(0)
+    elif values.ndim == 3 and values.shape[0] == 1:
+        batched = values.unsqueeze(0)
+    elif values.ndim == 4 and values.shape[1] == 1:
+        batched = values
+    else:
+        raise ValueError(f"scalar map must be [H,W], [1,H,W], or [N,1,H,W], got {tuple(values.shape)}")
+    if tuple(batched.shape[-2:]) != tuple(target_size):
+        batched = F.interpolate(batched.float(), size=target_size, mode="bilinear", align_corners=False)
+    return batched.squeeze(0).squeeze(0)
+
+
 def load_aux_model(
     *,
     checkpoint_path: Path,
@@ -315,6 +331,7 @@ def build_aux_panel_dataset(
                 aux_target_mode=str(checkpoint_data_value(checkpoint, "AUX_TARGET_MODE", "seg_only")),
                 heatmap_sigma=float(checkpoint_data_value(checkpoint, "AUX_HEATMAP_SIGMA", 3.0)),
                 heatmap_cutoff=float(checkpoint_data_value(checkpoint, "AUX_HEATMAP_CUTOFF", 0.01)),
+                heatmap_target_stride=int(checkpoint_data_value(checkpoint, "AUX_HEATMAP_TARGET_STRIDE", 1)),
                 paf_line_thickness=int(checkpoint_data_value(checkpoint, "AUX_PAF_LINE_THICKNESS", 2)),
                 paf_mask_thickness=int(checkpoint_data_value(checkpoint, "AUX_PAF_MASK_THICKNESS", 6)),
                 direction_target_source=str(checkpoint_data_value(checkpoint, "AUX_DIRECTION_TARGET_SOURCE", "graph_edges")),
@@ -401,9 +418,12 @@ def predict_aux_maps(
         if aux_maps is None:
             raise KeyError("model output does not contain aux_maps")
         aux_maps = resize_aux_maps(aux_maps.detach().cpu(), target_size)[0]
+        native_heatmap = output.get("aux_heatmap_native")
+        if native_heatmap is not None:
+            native_heatmap = resize_scalar_map(native_heatmap.detach().cpu(), target_size)
     prediction = {
         "segmentation": torch.sigmoid(aux_maps[0]).clamp(0.0, 1.0),
-        "heatmap": torch.sigmoid(aux_maps[1]).clamp(0.0, 1.0),
+        "heatmap": torch.sigmoid(native_heatmap if native_heatmap is not None else aux_maps[1]).clamp(0.0, 1.0),
         "paf": torch.tanh(aux_maps[2:4]).clamp(-1.0, 1.0),
     }
     if aux_maps.shape[0] >= 5:
@@ -428,7 +448,8 @@ def make_aux_panel(
 ) -> Image.Image:
     input_image = image_tensor_to_pil(image)
     gt_segmentation = gt_segmentation.float().clamp(0.0, 1.0)
-    gt_heatmap = gt_heatmap.float().clamp(0.0, 1.0)
+    display_size = (int(gt_segmentation.shape[-2]), int(gt_segmentation.shape[-1]))
+    gt_heatmap = resize_scalar_map(gt_heatmap.float().clamp(0.0, 1.0), display_size)
     gt_paf = (
         gt_paf.float().permute(2, 0, 1).clamp(-1.0, 1.0)
         if gt_paf.ndim == 3 and gt_paf.shape[-1] == 2

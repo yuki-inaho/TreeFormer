@@ -19,6 +19,7 @@ private_optuna_joint_vr_aux_output := env_var_or_default("TREEFORMER_OPTUNA_OUTP
 seg_cache_root := env_var_or_default("TREEFORMER_SEG_CACHE_ROOT", assets_root + "/cache/fast_seg/private_seg_max128")
 joint_optuna_cache_root := env_var_or_default("TREEFORMER_JOINT_OPTUNA_CACHE_ROOT", assets_root + "/cache/fast_seg/joint_virtual_root_aux_mask_skeleton_v3")
 joint_seg_cache_root := env_var_or_default("TREEFORMER_SEG_CACHE_ROOT", joint_optuna_cache_root + "/heatmap_sigma_3_0")
+native_heatmap_cache_root := env_var_or_default("TREEFORMER_NATIVE_HEATMAP_CACHE_ROOT", assets_root + "/cache/fast_seg/native_heatmap_stride4_v4")
 aux_panel_output := env_var_or_default("TREEFORMER_AUX_PANEL_OUTPUT", assets_root + "/aux_inference_panels")
 ablation_name := env_var_or_default("TREEFORMER_ABLATION", "heatmap_mse_baseline")
 
@@ -127,6 +128,10 @@ cache-private-fast-seg-heatmap-paf:
 cache-private-fast-seg-heatmap-paf-ablation:
     @test -n "{{private_treeformer_data}}" || (echo "Set TREEFORMER_PRIVATE_DATA to a legacy TreeFormer dataset root" >&2; exit 2)
     @PYTHONPATH=. {{python}} generate_fast_seg_cache.py --dataset-root "{{private_treeformer_data}}" --cache-root "{{seg_cache_root}}" --splits train val --max-size "${TREEFORMER_MAX_SIZE:-128}" --resize-policy "${TREEFORMER_SEG_RESIZE_POLICY:-legacy_half}" --aux-target-mode seg_heatmap_paf --heatmap-sigma "${TREEFORMER_HEATMAP_SIGMA:-3.0}" --heatmap-cutoff "${TREEFORMER_HEATMAP_CUTOFF:-0.01}" --direction-target-source "${TREEFORMER_DIRECTION_TARGET_SOURCE:-mask_skeleton}" --direction-encoding "${TREEFORMER_DIRECTION_ENCODING:-double_angle}" --direction-tangent-radius "${TREEFORMER_DIRECTION_TANGENT_RADIUS:-8}" --direction-junction-exclusion-radius "${TREEFORMER_DIRECTION_JUNCTION_EXCLUSION_RADIUS:-6}" --paf-line-thickness "${TREEFORMER_PAF_LINE_THICKNESS:-2}" --paf-mask-thickness "${TREEFORMER_PAF_MASK_THICKNESS:-6}"
+
+cache-private-native-heatmap-stride4:
+    @test -n "{{private_treeformer_data}}" || (echo "Set TREEFORMER_PRIVATE_DATA to a legacy TreeFormer dataset root" >&2; exit 2)
+    @PYTHONPATH=. {{python}} generate_fast_seg_cache.py --dataset-root "{{private_treeformer_data}}" --cache-root "{{native_heatmap_cache_root}}" --splits train val --max-size "${TREEFORMER_MAX_SIZE:-640}" --resize-policy full --aux-target-mode seg_heatmap_paf --heatmap-sigma 1.0 --heatmap-target-stride 4 --heatmap-cutoff "${TREEFORMER_HEATMAP_CUTOFF:-0.01}" --direction-target-source mask_skeleton --direction-encoding double_angle --direction-tangent-radius "${TREEFORMER_DIRECTION_TANGENT_RADIUS:-8}" --direction-junction-exclusion-radius "${TREEFORMER_DIRECTION_JUNCTION_EXCLUSION_RADIUS:-6}" --paf-line-thickness "${TREEFORMER_PAF_LINE_THICKNESS:-2}" --paf-mask-thickness "${TREEFORMER_PAF_MASK_THICKNESS:-6}"
 
 cache-private-joint-virtual-root-aux-optuna:
     @test -n "{{private_treeformer_data}}" || (echo "Set TREEFORMER_PRIVATE_DATA to a legacy TreeFormer dataset root" >&2; exit 2)

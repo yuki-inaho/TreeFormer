@@ -373,6 +373,7 @@ def test_aux_loss_requires_detail_target_when_fifth_channel_active_and_not_provi
     try:
         _compute_aux_loss_terms(
             aux_maps,
+            aux_maps[:, 1:2],
             seg_target,
             heatmap_target,
             paf_target,
@@ -384,6 +385,47 @@ def test_aux_loss_requires_detail_target_when_fifth_channel_active_and_not_provi
         assert "detail_target" in str(exc)
     else:
         raise AssertionError("expected _compute_aux_loss_terms to reject a missing detail_target on a 5ch head")
+
+
+def test_native_heatmap_logits_are_used_for_stride_target_supervision():
+    targets = _targets(batch_size=1, height=8, width=12)
+    targets["heatmap"] = torch.zeros(1, 1, 2, 3)
+    targets["heatmap"][:, :, 1, 1] = 1.0
+    aux_maps = torch.zeros(1, 4, 8, 12, requires_grad=True)
+    native_logits = torch.zeros(1, 1, 2, 3, requires_grad=True)
+    losses = compute_aux_losses(
+        {"aux_maps": aux_maps, "aux_heatmap_native": native_logits},
+        targets,
+        AuxLossWeights(segmentation=0.0, heatmap=1.0, paf=0.0),
+    )
+
+    losses["total"].backward()
+
+    assert native_logits.grad is not None
+    assert torch.count_nonzero(native_logits.grad) > 0
+    assert aux_maps.grad is not None
+    assert torch.count_nonzero(aux_maps.grad) == 0
+
+    metrics = compute_aux_eval_metrics(
+        {"aux_maps": aux_maps.detach(), "aux_heatmap_native": native_logits.detach()},
+        targets,
+        AuxLossWeights(segmentation=0.0, heatmap=1.0, paf=0.0),
+    )
+    assert torch.isfinite(metrics["heatmap_peak_contrast"])
+    assert torch.isfinite(metrics["heatmap_node_recall"])
+
+
+def test_native_heatmap_target_rejects_legacy_full_resolution_head():
+    targets = _targets(batch_size=1, height=8, width=12)
+    targets["heatmap"] = torch.zeros(1, 1, 2, 3)
+    aux_maps = torch.zeros(1, 4, 8, 12)
+
+    try:
+        compute_aux_losses({"aux_maps": aux_maps}, targets, AuxLossWeights())
+    except KeyError as exc:
+        assert "aux_heatmap_native" in str(exc)
+    else:
+        raise AssertionError("expected native target supervision to require native heatmap logits")
 
 
 def test_compute_aux_eval_metrics_returns_only_scalar_tensors():

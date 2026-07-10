@@ -72,6 +72,7 @@ DATA:
   AUX_TARGET_MODE: seg_heatmap_paf
   AUX_HEATMAP_SIGMA: 3.0
   AUX_HEATMAP_CUTOFF: 0.01
+  AUX_HEATMAP_TARGET_STRIDE: 1
   # Learn local orientation over the external-mask foreground, excluding
   # ambiguous junctions, rather than a thin graph-derived line.
   AUX_DIRECTION_TARGET_SOURCE: mask_skeleton

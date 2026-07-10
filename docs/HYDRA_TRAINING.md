@@ -466,7 +466,7 @@ just cfg-private-curriculum-stage1
 | `ema` | `disabled`, `default` | EMA update/evaluation behavior |
 | `checkpoint` | `default` | last/best/periodic checkpoint policy |
 | `distributed` | `single`, `ddp` | Single-process or torchrun/DDP execution |
-| `ablation` | `heatmap_mse_baseline`, `heatmap_sigma1_5_mse`, `heatmap_focal`, `heatmap_focal_ridge`, `heatmap_focal_ridge_seg_low` | Opt-in dense aux ablation overrides, applied as `+ablation=<name>` |
+| `ablation` | `heatmap_mse_baseline`, `heatmap_sigma1_5_mse`, `heatmap_focal`, `heatmap_focal_ridge`, `heatmap_focal_ridge_seg_low`, `heatmap_native_stride4` | Opt-in dense aux ablation overrides, applied as `+ablation=<name>` |
 
 The `data` group lives in `conf/data/` and is required by `conf/config.yaml` defaults. It is tracked in Git; a checkout missing it cannot compose any Hydra config.
 
@@ -540,6 +540,27 @@ End-to-end one-epoch GPU timing with fast disk cache and 4 workers:
 - checkpoint save still costs about 0.4-0.8s depending on whether both `best.pt` and `last.pt` are written
 
 Keep cache files outside Git. They are derived artifacts and may contain dataset-derived tensors.
+
+### Native Heatmap Grid
+
+The standard heatmap target is image-resolution (`DATA.AUX_HEATMAP_TARGET_STRIDE=1`). For point-like node supervision at 640x480, use the opt-in `+ablation=heatmap_native_stride4` profile. It changes only the heatmap contract:
+
+- the dense aux decoder reconstructs a stride-4 feature grid from TreeFormer's first stride-8 feature;
+- the node heatmap is projected directly from that decoder feature with a `1x1` convolution;
+- segmentation remains a dense decoder output and edge direction retains its own output tower;
+- the heatmap target is generated at stride 4 with `AUX_HEATMAP_SIGMA=1.0` measured in native-grid cells;
+- loss and peak metrics consume `aux_heatmap_native` directly. They do not supervise a full-resolution interpolation.
+
+Generate a separate cache before selecting the profile because cache format v4 includes the target stride:
+
+```bash
+export TREEFORMER_MAX_SIZE=640
+just cache-private-native-heatmap-stride4
+```
+
+Then compose or train with `train=seg_heatmap_paf +ablation=heatmap_native_stride4`. The panel renderer upsamples the native target and prediction only for display. The 9/10-tuple legacy collate contract remains unchanged.
+
+This first comparison intentionally has no NMS or offset head. Add those only if the stride-4 native-grid result still produces ridge-like peaks.
 
 ## Runtime GPU Speedups
 

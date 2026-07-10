@@ -10,6 +10,7 @@ MODEL:
     ENABLED: false
     HIDDEN_DIM: 128
     OUT_CHANNELS: 4
+    DECODER_STRIDE: 4
     GRAPH_CONDITIONING: none
   ENCODER:
     TYPE: deformable_transformer_backbone

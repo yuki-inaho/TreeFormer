@@ -20,38 +20,80 @@ def _get_attr(config, name, default=None):
     return getattr(config, name, default)
 
 
-class AuxMapHead(nn.Module):
-    """Lightweight dense prediction head for segmentation, heatmap and PAF targets."""
+def _group_count(channels, maximum=8):
+    groups = min(int(maximum), int(channels))
+    while int(channels) % groups != 0:
+        groups -= 1
+    return groups
 
-    def __init__(self, in_channels, hidden_channels, out_channels):
+
+def _conv_norm_relu(in_channels, out_channels):
+    return nn.Sequential(
+        nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
+        nn.GroupNorm(_group_count(out_channels), out_channels),
+        nn.ReLU(inplace=True),
+    )
+
+
+class AuxMapHead(nn.Module):
+    """Stride-4 dense decoder with a direct native-grid node heatmap head.
+
+    ``feature`` is the first TreeFormer feature level (stride 8).  The low
+    resolution encoder refinement is kept separate because graph conditioning
+    consumes it at stride 8.  The dense decoder then upsamples it to stride 4.
+    Heatmap logits branch directly from that decoder feature through a 1x1
+    projection; segmentation and direction are allowed their own lightweight
+    output towers.
+    """
+
+    def __init__(self, in_channels, hidden_channels, out_channels, decoder_stride=4):
         super().__init__()
         hidden_channels = int(hidden_channels)
         out_channels = int(out_channels)
+        decoder_stride = int(decoder_stride)
         if hidden_channels <= 0:
             raise ValueError(f"aux head hidden_channels must be positive, got {hidden_channels}")
-        if out_channels <= 0:
-            raise ValueError(f"aux head out_channels must be positive, got {out_channels}")
-        groups = min(8, hidden_channels)
-        while hidden_channels % groups != 0:
-            groups -= 1
-        self.layers = nn.Sequential(
-            nn.Conv2d(in_channels, hidden_channels, kernel_size=3, padding=1),
-            nn.GroupNorm(groups, hidden_channels),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(hidden_channels, hidden_channels, kernel_size=3, padding=1),
-            nn.GroupNorm(groups, hidden_channels),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(hidden_channels, out_channels, kernel_size=1),
+        if out_channels not in {4, 5}:
+            raise ValueError(f"aux head out_channels must be 4 or 5, got {out_channels}")
+        if decoder_stride not in {4, 8}:
+            raise ValueError(f"aux head decoder_stride must be 4 or 8, got {decoder_stride}")
+
+        self.decoder_stride = decoder_stride
+        self.low_resolution_encoder = nn.Sequential(
+            _conv_norm_relu(in_channels, hidden_channels),
+            _conv_norm_relu(hidden_channels, hidden_channels),
         )
+        self.decoder_refine = _conv_norm_relu(hidden_channels, hidden_channels)
+        self.segmentation_tower = _conv_norm_relu(hidden_channels, hidden_channels)
+        self.direction_tower = _conv_norm_relu(hidden_channels, hidden_channels)
+        self.detail_tower = _conv_norm_relu(hidden_channels, hidden_channels) if out_channels == 5 else None
+
+        self.segmentation_head = nn.Conv2d(hidden_channels, 1, kernel_size=1)
+        # Intentionally direct: no heatmap-specific tower before this projection.
+        self.heatmap_head = nn.Conv2d(hidden_channels, 1, kernel_size=1)
+        self.direction_head = nn.Conv2d(hidden_channels, 2, kernel_size=1)
+        self.detail_head = nn.Conv2d(hidden_channels, 1, kernel_size=1) if out_channels == 5 else None
 
     def forward(self, feature, output_size):
-        _feature, logits = self.forward_with_features(feature, output_size)
+        _low_feature, logits, _heatmap_native = self.forward_with_features(feature, output_size)
         return logits
 
     def forward_with_features(self, feature, output_size):
-        aux_feature = self.layers[:-1](feature)
-        logits = self.layers[-1](aux_feature)
-        return aux_feature, F.interpolate(logits, size=output_size, mode="bilinear", align_corners=False)
+        low_feature = self.low_resolution_encoder(feature)
+        decoder_feature = low_feature
+        if self.decoder_stride == 4:
+            decoder_feature = F.interpolate(decoder_feature, scale_factor=2.0, mode="bilinear", align_corners=False)
+        decoder_feature = self.decoder_refine(decoder_feature)
+
+        segmentation_logits = self.segmentation_head(self.segmentation_tower(decoder_feature))
+        heatmap_native = self.heatmap_head(decoder_feature)
+        direction_logits = self.direction_head(self.direction_tower(decoder_feature))
+        native_maps = [segmentation_logits, heatmap_native, direction_logits]
+        if self.detail_head is not None and self.detail_tower is not None:
+            native_maps.append(self.detail_head(self.detail_tower(decoder_feature)))
+        logits = torch.cat(native_maps, dim=1)
+        full_resolution_logits = F.interpolate(logits, size=output_size, mode="bilinear", align_corners=False)
+        return low_feature, full_resolution_logits, heatmap_native
 
 
 class RelationFormer(nn.Module):
@@ -160,6 +202,7 @@ class RelationFormer(nn.Module):
                 in_channels=self.hidden_dim,
                 hidden_channels=aux_hidden_dim,
                 out_channels=_get_attr(aux_head_config, "OUT_CHANNELS", 4),
+                decoder_stride=_get_attr(aux_head_config, "DECODER_STRIDE", 4),
             )
             if self.aux_graph_conditioning_mode == "aux_feature":
                 conditioning_groups = min(32, self.hidden_dim)
@@ -235,12 +278,17 @@ class RelationFormer(nn.Module):
         out = {}
         if self.aux_head is not None:
             if self.aux_graph_conditioning is None:
-                out["aux_maps"] = self.aux_head(srcs[0], samples.tensors.shape[-2:])
-            else:
-                aux_feature, aux_maps = self.aux_head.forward_with_features(
+                _aux_feature, aux_maps, heatmap_native = self.aux_head.forward_with_features(
                     srcs[0], samples.tensors.shape[-2:]
                 )
                 out["aux_maps"] = aux_maps
+                out["aux_heatmap_native"] = heatmap_native
+            else:
+                aux_feature, aux_maps, heatmap_native = self.aux_head.forward_with_features(
+                    srcs[0], samples.tensors.shape[-2:]
+                )
+                out["aux_maps"] = aux_maps
+                out["aux_heatmap_native"] = heatmap_native
                 srcs[0] = srcs[0] + self.aux_graph_conditioning(aux_feature)
         if not self.graph_output_enabled:
             return None, out

@@ -15,6 +15,7 @@ from infer_aux_panel_treeformer import (
     mask_paf_by_segmentation,
     mask_scalar_map_by_segmentation,
     paf_to_rgb,
+    resize_scalar_map,
     unpack_aux_panel_sample,
     write_aux_summary_json,
 )
@@ -43,6 +44,16 @@ def test_aux_visualization_helpers_return_rgb_images():
     assert image_tensor_to_pil(image).mode == "RGB"
     assert heatmap_to_pil(heatmap).mode == "RGB"
     assert paf_to_rgb(paf).mode == "RGB"
+
+
+def test_resize_scalar_map_expands_native_heatmap_for_panel_display():
+    native_heatmap = torch.zeros(2, 3)
+    native_heatmap[1, 2] = 1.0
+
+    display_heatmap = resize_scalar_map(native_heatmap, (8, 12))
+
+    assert display_heatmap.shape == (8, 12)
+    assert display_heatmap.max().item() > 0.9
 
 
 def test_heatmap_visualization_is_black_outside_visible_mask():
@@ -107,6 +118,33 @@ def test_make_aux_panel_and_summary_json(tmp_path: Path):
     assert panel_path.is_file()
     assert isinstance(panel, Image.Image)
     assert '"sample_id": "sample"' in json_path.read_text(encoding="utf-8")
+
+
+def test_make_aux_panel_resizes_native_gt_heatmap_to_image_size():
+    image = torch.zeros(3, 16, 16)
+    segmentation = torch.zeros(16, 16)
+    segmentation[4:12, 4:12] = 1.0
+    native_heatmap = torch.zeros(4, 4)
+    native_heatmap[2, 2] = 1.0
+    paf = torch.zeros(16, 16, 2)
+    prediction = {
+        "segmentation": segmentation,
+        "heatmap": torch.zeros(16, 16),
+        "paf": torch.zeros(2, 16, 16),
+    }
+
+    panel = make_aux_panel(
+        image=image,
+        gt_segmentation=segmentation,
+        gt_heatmap=native_heatmap,
+        gt_paf=paf,
+        prediction=prediction,
+        columns=3,
+        panel_width=64,
+        pad=4,
+    )
+
+    assert panel.width > 0
 
 
 def test_make_aux_panel_can_render_trained_detail_boundary(tmp_path: Path):

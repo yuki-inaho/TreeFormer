@@ -27,7 +27,7 @@ class DummyEncoder(torch.nn.Module):
 
     def forward(self, samples):
         batch, _channels, height, width = samples.tensors.shape
-        feature = torch.zeros((batch, 4, max(1, height // 4), max(1, width // 4)), dtype=samples.tensors.dtype)
+        feature = torch.zeros((batch, 4, max(1, height // 8), max(1, width // 8)), dtype=samples.tensors.dtype)
         mask = torch.zeros((batch, feature.shape[-2], feature.shape[-1]), dtype=torch.bool)
         pos = torch.zeros((batch, self.hidden_dim, feature.shape[-2], feature.shape[-1]), dtype=samples.tensors.dtype)
         return [DummyNestedTensor(feature, mask)], [pos]
@@ -126,3 +126,6 @@ def test_relationformer_can_condition_graph_features_on_aux_trunk():
 
     assert model.aux_graph_conditioning is not None
     assert out["aux_maps"].shape[1] == 5
+    assert out["aux_maps"].shape[-2:] == (32, 32)
+    assert out["aux_heatmap_native"].shape == (1, 1, 8, 8)
+    assert isinstance(model.aux_head.heatmap_head, torch.nn.Conv2d)
