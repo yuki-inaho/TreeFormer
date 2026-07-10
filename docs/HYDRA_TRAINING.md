@@ -709,6 +709,8 @@ just infer-panels-with-aux
 
 `infer-panels-with-aux` appends GT / predicted segmentation overlays, GT / predicted node heatmaps, and GT / predicted edge-direction maps to each graph summary image. Heatmap or PAF prediction panels are hidden automatically when the aux checkpoint recorded a zero loss weight for that target; pass `--aux-show-untrained-maps` only when debugging raw, untrained channels.
 
+For an aux-enabled graph checkpoint, `infer_panel_treeformer.py` also gates graph-token candidates with the **predicted** segmentation confidence before relation / MST postprocessing. The default threshold is `0.5`; this path never reads a GT mask. The graph nodes, heatmap display, and edge-direction display therefore share the model's own foreground decision at inference. A graph checkpoint without an auxiliary segmentation head must opt out explicitly with `--graph-node-segmentation-threshold 0`.
+
 The recipe renders the validation split as:
 
 ```bash

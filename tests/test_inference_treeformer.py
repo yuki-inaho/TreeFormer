@@ -53,6 +53,38 @@ def test_mst_infer_returns_tree_from_lowest_non_edge_costs():
     np.testing.assert_array_equal(edges[0], np.array([[0, 1], [0, 2]]))
 
 
+def test_relation_infer_applies_explicit_node_valid_mask_before_graph_postprocessing():
+    h, out = make_inputs()
+    model = DummyModel(costs=[0.1, 0.2, 0.9])
+
+    nodes, edges = relation_infer(
+        h,
+        out,
+        model,
+        obj_token=3,
+        rln_token=1,
+        mode="mst",
+        node_valid_mask=torch.tensor([[True, False, True]]),
+    )
+
+    np.testing.assert_allclose(nodes[0].numpy(), np.array([[0.0, 0.0], [0.0, 1.0]], dtype=np.float32))
+    np.testing.assert_array_equal(edges[0], np.array([[0, 1]]))
+
+
+def test_relation_infer_rejects_mismatched_node_valid_mask():
+    h, out = make_inputs()
+
+    with pytest.raises(ValueError, match="node_valid_mask"):
+        relation_infer(
+            h,
+            out,
+            DummyModel(costs=[0.1, 0.2, 0.9]),
+            obj_token=3,
+            rln_token=1,
+            node_valid_mask=torch.tensor([[True, False]]),
+        )
+
+
 def test_mst_helper_keeps_zero_cost_edges():
     node_pairs = torch.tensor([[0, 1], [0, 2], [1, 2]], dtype=torch.long)
     costs = torch.tensor([0.0, 0.4, 0.6], dtype=torch.float32)

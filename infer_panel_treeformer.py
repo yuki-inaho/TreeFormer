@@ -19,6 +19,7 @@ from typing import Any
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 from torchvision.transforms import functional as TVF
 
@@ -195,12 +196,17 @@ def run_inference(
     run: RunSpec,
     nms: bool,
     distance_weight: float,
+    graph_node_segmentation_threshold: float,
 ) -> tuple[np.ndarray, np.ndarray, dict[str, Any] | None]:
     from inference_treeformer import relation_infer
 
     with torch.inference_mode():
         images = [tensor.to(device, non_blocking=True)]
         h, out = model(images)
+        node_valid_mask = graph_node_segmentation_mask(
+            out,
+            threshold=graph_node_segmentation_threshold,
+        )
         result = relation_infer(
             h.detach(),
             out,
@@ -212,6 +218,7 @@ def run_inference(
             mode=run.mode,
             distance_weight=distance_weight,
             return_details=run.mode == "vr-mst",
+            node_valid_mask=node_valid_mask,
         )
     if len(result) == 3:
         pred_nodes, pred_edges, details = result
@@ -220,6 +227,51 @@ def run_inference(
         pred_nodes, pred_edges = result
         detail = None
     return tensor_to_numpy_2d(pred_nodes[0]), edges_to_numpy(pred_edges[0]), detail
+
+
+def graph_node_segmentation_mask(out: Mapping[str, Any], *, threshold: float) -> torch.Tensor | None:
+    """Return a GT-free graph-token mask from predicted segmentation logits.
+
+    TreeFormer graph nodes are normalized ``(x, y)`` coordinates.  Sampling the
+    current forward pass' segmentation map at those coordinates ensures graph
+    postprocessing cannot retain a node that the same model considers
+    background.  A threshold of zero is the explicit compatibility opt-out for
+    checkpoints without an auxiliary segmentation head.
+    """
+
+    if not 0.0 <= threshold <= 1.0:
+        raise ValueError(f"graph node segmentation threshold must be in [0, 1], got {threshold}")
+    if threshold == 0.0:
+        return None
+
+    aux_maps = out.get("aux_maps")
+    pred_nodes = out.get("pred_nodes")
+    if not isinstance(aux_maps, torch.Tensor):
+        raise ValueError(
+            "graph node segmentation gating requires aux_maps; "
+            "pass --graph-node-segmentation-threshold 0 to disable it explicitly"
+        )
+    if not isinstance(pred_nodes, torch.Tensor):
+        raise KeyError("model output does not contain pred_nodes")
+    if aux_maps.ndim != 4 or aux_maps.shape[1] < 1:
+        raise ValueError(f"aux_maps must have shape [B, C>=1, H, W], got {tuple(aux_maps.shape)}")
+    if pred_nodes.ndim != 3 or pred_nodes.shape[0] != aux_maps.shape[0] or pred_nodes.shape[-1] < 2:
+        raise ValueError(
+            "pred_nodes must have shape [B, N, >=2] matching aux_maps batch: "
+            f"got {tuple(pred_nodes.shape)} and {tuple(aux_maps.shape)}"
+        )
+
+    normalized_nodes = pred_nodes[..., :2].detach().clamp(0.0, 1.0)
+    grid = normalized_nodes.mul(2.0).sub(1.0).unsqueeze(2)
+    segmentation_confidence = torch.sigmoid(aux_maps[:, :1].detach())
+    sampled_confidence = F.grid_sample(
+        segmentation_confidence,
+        grid,
+        mode="bilinear",
+        padding_mode="zeros",
+        align_corners=False,
+    ).squeeze(1).squeeze(-1)
+    return sampled_confidence >= threshold
 
 
 def tensor_to_numpy_2d(nodes: torch.Tensor | np.ndarray | Iterable[Iterable[float]]) -> np.ndarray:
@@ -645,6 +697,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--recursive", action="store_true", help="Search images recursively")
     parser.add_argument("--limit", type=int, default=None, help="Optional max number of images to render")
     parser.add_argument("--nms", action="store_true", help="Apply token NMS before relation inference")
+    parser.add_argument(
+        "--graph-node-segmentation-threshold",
+        type=float,
+        default=0.5,
+        help=(
+            "Keep graph-node candidates only where this model's predicted segmentation confidence meets the threshold. "
+            "Use 0 only as an explicit compatibility opt-out for checkpoints without an aux segmentation head."
+        ),
+    )
     parser.add_argument("--strict", action="store_true", help="Use strict checkpoint loading")
     parser.add_argument("--no-gt", action="store_true", help="Do not try to add a Ground truth panel")
     parser.add_argument("--columns", type=int, default=0, help="Grid columns; 0 means one horizontal row")
@@ -794,6 +855,7 @@ def main() -> None:
                 run=run,
                 nms=bool(args.nms),
                 distance_weight=float(args.distance_weight),
+                graph_node_segmentation_threshold=float(args.graph_node_segmentation_threshold),
             )
             predictions[run.label] = {"nodes": nodes, "edges": edges, "details": details}
             panels.append(

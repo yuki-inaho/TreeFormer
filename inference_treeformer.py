@@ -159,6 +159,7 @@ def relation_infer(
     virtual_root_mst: bool = False,
     root_penalty: float = 0.0,
     return_details: bool = False,
+    node_valid_mask: torch.Tensor | None = None,
 ) -> InferenceReturn:
     if mode is None:
         mode = "vr-mst" if virtual_root_mst else ("mst-dist" if mst and use_distance else ("mst" if mst else "raw"))
@@ -168,9 +169,16 @@ def relation_infer(
     use_distance = mode == "mst-dist"
     virtual_root_mst = mode == "vr-mst"
 
-    valid_token = torch.argmax(out["pred_logits"], -1).detach()
+    valid_token = torch.argmax(out["pred_logits"], -1).detach().to(dtype=torch.bool)
+    if node_valid_mask is not None:
+        if node_valid_mask.shape != valid_token.shape:
+            raise ValueError(
+                "node_valid_mask must match pred_logits token shape: "
+                f"expected {tuple(valid_token.shape)}, got {tuple(node_valid_mask.shape)}"
+            )
+        valid_token &= node_valid_mask.detach().to(device=valid_token.device, dtype=torch.bool)
     if nms:
-        valid_token = _valid_tokens_after_nms(valid_token, out)
+        valid_token &= _valid_tokens_after_nms(valid_token, out).to(dtype=torch.bool)
 
     pred_nodes = []
     pred_edges = []

@@ -1,12 +1,14 @@
 from pathlib import Path
 
 import numpy as np
+import pytest
 import torch
 from PIL import Image
 
 from infer_panel_treeformer import (
     discover_images,
     draw_graph_overlay,
+    graph_node_segmentation_mask,
     load_config_for_run,
     load_legacy_pt,
     make_aux_diagnostic_panels,
@@ -15,6 +17,28 @@ from infer_panel_treeformer import (
     save_graph_json,
     select_state_dict,
 )
+
+
+def test_graph_node_segmentation_mask_uses_predicted_logits_without_ground_truth():
+    aux_maps = torch.full((1, 4, 4, 4), -12.0)
+    aux_maps[:, 0, :2, :2] = 12.0
+    output = {
+        "aux_maps": aux_maps,
+        "pred_nodes": torch.tensor([[[0.25, 0.25, 0.1, 0.1], [0.75, 0.75, 0.1, 0.1]]]),
+    }
+
+    node_mask = graph_node_segmentation_mask(output, threshold=0.5)
+
+    assert node_mask is not None
+    assert node_mask.tolist() == [[True, False]]
+
+
+def test_graph_node_segmentation_mask_requires_explicit_opt_out_without_aux_head():
+    output = {"pred_nodes": torch.zeros((1, 2, 4))}
+
+    assert graph_node_segmentation_mask(output, threshold=0.0) is None
+    with pytest.raises(ValueError, match="aux_maps"):
+        graph_node_segmentation_mask(output, threshold=0.5)
 
 
 def test_parse_run_spec_accepts_hydra_checkpoint_without_config(tmp_path: Path):
