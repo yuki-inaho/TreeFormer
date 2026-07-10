@@ -8,6 +8,7 @@ import torch.distributed as dist
 import networkx as nx
 import numpy as np
 from inference_treeformer import relation_infer as shared_relation_infer
+from treeformer_train.runtime import amp_context
 
 
 def _dist_rank():
@@ -996,7 +997,7 @@ def epoch_train(
     return res_total, res_class, res_nodes, res_edges, res_boxes, res_cards
 
 
-def epoch_val(val_loader, net, config, device, SMD, args):
+def epoch_val(val_loader, net, config, device, SMD, args, *, amp_enabled=False, amp_dtype=torch.float16):
     net.eval()
     # if dist.get_rank() == 0:
     # print(len(val_loader))
@@ -1014,7 +1015,8 @@ def epoch_val(val_loader, net, config, device, SMD, args):
         edges = [edge.to(device) for edge in edges]
 
         # ====================net=====================
-        h, out = net(images)
+        with amp_context(device, enabled=amp_enabled, dtype=amp_dtype):
+            h, out = net(images)
         if args.use_gnn:
             pred_nodes, pred_edges = relation_infer_gnn(
                 h.detach(), out, net, config.MODEL.DECODER.OBJ_TOKEN, config.MODEL.DECODER.RLN_TOKEN

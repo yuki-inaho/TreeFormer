@@ -28,6 +28,9 @@ runtime:
     fullgraph: true
     dynamic: false
     backend: null
+  amp:
+    enabled: false
+    dtype: float16
 
 hydra:
   job:

@@ -16,6 +16,8 @@ from treeformer_train.ema import ModelEma, unwrap_model
 from treeformer_train.optimizers import build_optimizer_bundle, set_optimizer_eval_mode, set_optimizer_train_mode
 from treeformer_train.runtime import (
     barrier,
+    amp_dtype,
+    build_grad_scaler,
     runtime_compile_enabled,
     setup_distributed,
     setup_reproducibility,
@@ -290,6 +292,13 @@ def main(cfg: DictConfig) -> None:
     device = _select_device(cfg, distributed_context.local_rank)
     setup_torch_performance(cfg.runtime, device)
     setup_reproducibility(int(legacy_config.DATA.SEED) + distributed_context.rank)
+    amp_enabled = bool(OmegaConf.select(cfg, "runtime.amp.enabled", default=False))
+    if amp_enabled and device.type != "cuda":
+        raise ValueError("runtime.amp.enabled=true requires a CUDA device")
+    selected_amp_dtype = amp_dtype(cfg.runtime)
+    grad_scaler = build_grad_scaler(enabled=amp_enabled, device=device, dtype=selected_amp_dtype)
+    if amp_enabled and distributed_context.is_rank_zero:
+        print(f"AMP enabled: dtype={selected_amp_dtype} grad_scaler={grad_scaler is not None}")
 
     if distributed_context.is_rank_zero:
         print(OmegaConf.to_yaml(cfg, resolve=True))
@@ -434,6 +443,9 @@ def main(cfg: DictConfig) -> None:
                 loss_computer=aux_loss_computer,
                 clip_max_norm=float(legacy_config.TRAIN.CLIP_MAX_NORM),
                 after_optimizer_step=(lambda **_: ema.update(model)) if ema is not None else None,
+                amp_enabled=amp_enabled,
+                amp_dtype=selected_amp_dtype,
+                grad_scaler=grad_scaler,
             )
         elif joint_graph_aux_training:
             from treeformer_train.joint_training import epoch_train_joint_graph_aux
@@ -452,6 +464,9 @@ def main(cfg: DictConfig) -> None:
                 joint_aux_weight=float(OmegaConf.select(cfg, "TRAIN.W_JOINT_AUX", default=1.0)),
                 clip_max_norm=float(legacy_config.TRAIN.CLIP_MAX_NORM),
                 after_optimizer_step=(lambda **_: ema.update(model)) if ema is not None else None,
+                amp_enabled=amp_enabled,
+                amp_dtype=selected_amp_dtype,
+                grad_scaler=grad_scaler,
             )
         else:
             train_total, train_class, train_nodes, train_edges, train_boxes, train_cards = epoch_train(
@@ -492,7 +507,8 @@ def main(cfg: DictConfig) -> None:
             if ema is not None and bool(cfg.ema.evaluate):
                 with ema.average_parameters(model):
                     val_smd = epoch_val(
-                        val_loader=val_loader, net=model, config=legacy_config, device=device, SMD=smd, args=args
+                        val_loader=val_loader, net=model, config=legacy_config, device=device, SMD=smd, args=args,
+                        amp_enabled=amp_enabled, amp_dtype=selected_amp_dtype
                     )
                     val_aux_metrics = epoch_val_aux_from_joint_loader(
                         val_loader=val_loader,
@@ -500,10 +516,13 @@ def main(cfg: DictConfig) -> None:
                         device=device,
                         loss_weights=aux_loss_weights,
                         loss_computer=aux_loss_computer,
+                        amp_enabled=amp_enabled,
+                        amp_dtype=selected_amp_dtype,
                     )
             else:
                 val_smd = epoch_val(
-                    val_loader=val_loader, net=model, config=legacy_config, device=device, SMD=smd, args=args
+                    val_loader=val_loader, net=model, config=legacy_config, device=device, SMD=smd, args=args,
+                    amp_enabled=amp_enabled, amp_dtype=selected_amp_dtype
                 )
                 val_aux_metrics = epoch_val_aux_from_joint_loader(
                     val_loader=val_loader,
@@ -511,16 +530,20 @@ def main(cfg: DictConfig) -> None:
                     device=device,
                     loss_weights=aux_loss_weights,
                     loss_computer=aux_loss_computer,
+                    amp_enabled=amp_enabled,
+                    amp_dtype=selected_amp_dtype,
                 )
         else:
             if ema is not None and bool(cfg.ema.evaluate):
                 with ema.average_parameters(model):
                     val_smd = epoch_val(
-                        val_loader=val_loader, net=model, config=legacy_config, device=device, SMD=smd, args=args
+                        val_loader=val_loader, net=model, config=legacy_config, device=device, SMD=smd, args=args,
+                        amp_enabled=amp_enabled, amp_dtype=selected_amp_dtype
                     )
             else:
                 val_smd = epoch_val(
-                    val_loader=val_loader, net=model, config=legacy_config, device=device, SMD=smd, args=args
+                    val_loader=val_loader, net=model, config=legacy_config, device=device, SMD=smd, args=args,
+                    amp_enabled=amp_enabled, amp_dtype=selected_amp_dtype
                 )
 
         epoch_seconds = time.time() - epoch_start

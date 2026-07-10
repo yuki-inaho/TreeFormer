@@ -533,6 +533,20 @@ These target Ampere-class GPUs and newer by allowing TensorFloat-32 matmul/convo
 
 - `runtime.compile.aux_head=true` compiles only the lightweight dense aux head with `nn.Module.compile()`. This preserves checkpoint `state_dict` keys.
 - `runtime.compile.aux_loss=true` compiles the pure tensor aux-loss core. Target validation and range checks remain eager so bad masks still fail with clear errors.
+
+For joint graph+aux training, FP16 AMP is also opt-in:
+
+```bash
+TREEFORMER_AMP=true \
+TREEFORMER_AMP_DTYPE=float16 \
+TREEFORMER_BATCH_SIZE=4 \
+just train-private-joint-virtual-root-aux
+```
+
+AMP uses `GradScaler` and unscales before gradient clipping. Gradient
+accumulation is not enabled by this switch. On the local RTX A4500, the
+640x480, batch-4 smoke completed with FP16 and GPU EMA without OOM; confirm
+VRAM again when changing the model, input size, or concurrent GPU workload.
 - The full TreeFormer model is not compiled by default. The graph path still includes Python list/NestedTensor handling and a custom CUDA deformable-attention extension, both of which are poor first targets for whole-model fullgraph compilation.
 
 The full segmentation recipe enables aux-head and aux-loss compile by default:

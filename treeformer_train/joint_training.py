@@ -7,6 +7,7 @@ import torch
 import torch.distributed as dist
 
 from .aux_training import AuxLossComputer, AuxLossWeights, compute_aux_eval_metrics
+from .runtime import amp_context
 
 
 def _dist_rank() -> int:
@@ -82,6 +83,9 @@ def epoch_train_joint_graph_aux(
     joint_aux_weight: float,
     clip_max_norm: float = 20.0,
     after_optimizer_step: Any | None = None,
+    amp_enabled: bool = False,
+    amp_dtype: torch.dtype = torch.float16,
+    grad_scaler: torch.amp.GradScaler | None = None,
 ) -> dict[str, float]:
     net.train()
     averages = _MetricAverager()
@@ -91,10 +95,11 @@ def epoch_train_joint_graph_aux(
         images, graph_target, aux_target = _prepare_joint_batch(batchdata, device)
 
         _mark_compile_step_begin(device)
-        h, output = net(images)
-        graph_losses = graph_loss_function(h, output, graph_target, epoch_now, max_epoch, last_epoch)
-        aux_losses = aux_loss_computer(output, aux_target)
-        joint_total = graph_losses["total"] + float(joint_aux_weight) * aux_losses["total"]
+        with amp_context(device, enabled=amp_enabled, dtype=amp_dtype):
+            h, output = net(images)
+            graph_losses = graph_loss_function(h, output, graph_target, epoch_now, max_epoch, last_epoch)
+            aux_losses = aux_loss_computer(output, aux_target)
+            joint_total = graph_losses["total"] + float(joint_aux_weight) * aux_losses["total"]
         batch_size = len(graph_target["nodes"])
         averages.update(
             {
@@ -115,9 +120,17 @@ def epoch_train_joint_graph_aux(
         )
 
         optimizer.zero_grad(set_to_none=True)
-        joint_total.backward()
+        if grad_scaler is None:
+            joint_total.backward()
+        else:
+            grad_scaler.scale(joint_total).backward()
+            grad_scaler.unscale_(optimizer)
         torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=clip_max_norm, norm_type=2)
-        optimizer.step()
+        if grad_scaler is None:
+            optimizer.step()
+        else:
+            grad_scaler.step(optimizer)
+            grad_scaler.update()
         if after_optimizer_step is not None:
             after_optimizer_step(net=net, optimizer=optimizer, epoch=epoch_now, batch_index=i)
 
@@ -150,13 +163,16 @@ def epoch_val_aux_from_joint_loader(
     device: torch.device,
     loss_weights: AuxLossWeights,
     loss_computer: AuxLossComputer,
+    amp_enabled: bool = False,
+    amp_dtype: torch.dtype = torch.float16,
 ) -> dict[str, float]:
     net.eval()
     averages = _MetricAverager()
     for batchdata in val_loader:
         images, _, aux_target = _prepare_joint_batch(batchdata, device)
         _mark_compile_step_begin(device)
-        _, output = net(images)
+        with amp_context(device, enabled=amp_enabled, dtype=amp_dtype):
+            _, output = net(images)
         metrics = compute_aux_eval_metrics(output, aux_target, loss_weights, loss_core=loss_computer.core)
         averages.update(metrics, aux_target["segmentation"].shape[0])
     return averages.compute()

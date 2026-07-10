@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import random
+from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Any
 
@@ -76,6 +77,27 @@ def torch_compile_options(config: Any) -> dict[str, Any]:
 def runtime_compile_enabled(config: Any, key: str) -> bool:
     compile_config = _get(config, "compile", None)
     return bool(_get(compile_config, key, False))
+
+
+def amp_dtype(config: Any) -> torch.dtype:
+    value = str(_get(_get(config, "amp", None), "dtype", "float16")).lower()
+    if value in {"float16", "fp16", "half"}:
+        return torch.float16
+    if value in {"bfloat16", "bf16"}:
+        return torch.bfloat16
+    raise ValueError(f"unsupported runtime.amp.dtype: {value!r}")
+
+
+def amp_context(device: torch.device, *, enabled: bool, dtype: torch.dtype):
+    if not enabled:
+        return nullcontext()
+    return torch.autocast(device_type=device.type, dtype=dtype)
+
+
+def build_grad_scaler(*, enabled: bool, device: torch.device, dtype: torch.dtype) -> torch.amp.GradScaler | None:
+    if not enabled or dtype is not torch.float16:
+        return None
+    return torch.amp.GradScaler(device=device.type, enabled=True)
 
 
 def setup_distributed(config: Any) -> DistributedContext:
