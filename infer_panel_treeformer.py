@@ -44,6 +44,16 @@ class RunSpec:
         return self.mode == "mst-dist"
 
 
+@dataclass
+class AuxDiagnosticContext:
+    samples_by_name: dict[str, tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]]
+    model: torch.nn.Module | None
+    device: torch.device
+    show_heatmap: bool
+    show_paf: bool
+    loader_name: str
+
+
 def parse_run_spec(spec: str) -> RunSpec:
     parts = [part.strip() for part in spec.split("|")]
     if len(parts) == 3:
@@ -469,6 +479,125 @@ def save_graph_json(path: Path, predictions: Mapping[str, Any]) -> None:
         json.dump(payload, handle, ensure_ascii=False, indent=2)
 
 
+def make_aux_diagnostic_panels(
+    *,
+    image: torch.Tensor,
+    gt_segmentation: torch.Tensor,
+    gt_heatmap: torch.Tensor,
+    gt_paf: torch.Tensor,
+    prediction: Mapping[str, torch.Tensor] | None,
+    show_heatmap: bool,
+    show_paf: bool,
+) -> list[Image.Image]:
+    """Build compact dense-aux diagnostics for the graph summary panel.
+
+    GT targets are useful even when the graph checkpoint has no aux head.
+    Prediction panels are added only when an aux checkpoint/model is supplied.
+    """
+
+    from infer_aux_panel_treeformer import heatmap_to_pil, image_tensor_to_pil, overlay_map, paf_to_rgb
+
+    input_image = image_tensor_to_pil(image)
+    gt_segmentation = gt_segmentation.float().clamp(0.0, 1.0)
+    gt_heatmap = gt_heatmap.float().clamp(0.0, 1.0)
+    gt_paf = (
+        gt_paf.float().permute(2, 0, 1).clamp(-1.0, 1.0)
+        if gt_paf.ndim == 3 and gt_paf.shape[-1] == 2
+        else gt_paf.float().clamp(-1.0, 1.0)
+    )
+
+    panels = [add_label(overlay_map(input_image, gt_segmentation, (40, 210, 80)), "GT segmentation")]
+    if prediction is not None:
+        panels.append(
+            add_label(overlay_map(input_image, prediction["segmentation"], (240, 80, 40)), "Pred segmentation")
+        )
+
+    if show_heatmap:
+        panels.append(add_label(heatmap_to_pil(gt_heatmap), "GT node heatmap"))
+        if prediction is not None:
+            panels.append(add_label(heatmap_to_pil(prediction["heatmap"]), "Pred node heatmap"))
+
+    if show_paf:
+        panels.append(add_label(paf_to_rgb(gt_paf), "GT edge direction"))
+        if prediction is not None:
+            pred_paf = prediction["paf"].float().clamp(-1.0, 1.0)
+            pred_segmentation = prediction["segmentation"].float().clamp(0.0, 1.0)
+            if pred_paf.ndim == 3 and pred_paf.shape[0] == 2 and pred_segmentation.ndim == 2:
+                pred_paf = pred_paf * pred_segmentation.unsqueeze(0)
+            panels.append(add_label(paf_to_rgb(pred_paf), "Pred edge direction"))
+
+    return panels
+
+
+def build_aux_diagnostic_context(
+    *,
+    split_root: Path,
+    checkpoint_path: Path | None,
+    max_size: int,
+    loader: str,
+    weights: str,
+    legacy_key: str,
+    strict: bool,
+    device: torch.device,
+    show_untrained_maps: bool,
+) -> AuxDiagnosticContext:
+    from infer_aux_panel_treeformer import (
+        build_aux_panel_dataset,
+        checkpoint_train_weight,
+        load_aux_model,
+        load_checkpoint_mapping,
+        unpack_aux_panel_sample,
+    )
+
+    checkpoint: Mapping[str, Any] = {"config": {}}
+    model = None
+    show_heatmap = True
+    show_paf = True
+    if checkpoint_path is not None:
+        checkpoint = load_checkpoint_mapping(checkpoint_path)
+        show_heatmap = show_untrained_maps or checkpoint_train_weight(checkpoint, "W_AUX_HEATMAP", 1.0) > 0.0
+        show_paf = show_untrained_maps or checkpoint_train_weight(checkpoint, "W_AUX_PAF", 1.0) > 0.0
+        model = load_aux_model(
+            checkpoint_path=checkpoint_path,
+            device=device,
+            weights=weights,
+            legacy_key=legacy_key,
+            strict=strict,
+        )
+
+    dataset, loader_name = build_aux_panel_dataset(
+        split_root=split_root,
+        checkpoint=checkpoint,
+        max_size=max_size,
+        loader=loader,
+    )
+    samples_by_name: dict[str, tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]] = {}
+    for index in range(len(dataset)):
+        image, _label, pafs, segmentation, heatmap, _sample_id, sample_name = unpack_aux_panel_sample(dataset[index])
+        samples_by_name[str(sample_name)] = (image, pafs, segmentation, heatmap)
+
+    return AuxDiagnosticContext(
+        samples_by_name=samples_by_name,
+        model=model,
+        device=device,
+        show_heatmap=show_heatmap,
+        show_paf=show_paf,
+        loader_name=loader_name,
+    )
+
+
+def predict_aux_diagnostics(
+    context: AuxDiagnosticContext,
+    image: torch.Tensor,
+    target_size: tuple[int, int],
+) -> dict[str, torch.Tensor] | None:
+    if context.model is None:
+        return None
+    from infer_aux_panel_treeformer import predict_aux_maps
+
+    return predict_aux_maps(context.model, image, context.device, target_size)
+
+
 def _resampling_bilinear() -> int:
     return getattr(Image, "Resampling", Image).BILINEAR
 
@@ -513,6 +642,41 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--inset-fraction", type=float, default=0.32, help="Inset crop fraction")
     parser.add_argument("--inset-scale", type=float, default=1.65, help="Inset zoom scale")
     parser.add_argument("--save-graph-json", action="store_true", help="Save predicted nodes/edges JSON")
+    parser.add_argument(
+        "--include-aux-maps",
+        action="store_true",
+        help="Append dense aux target maps from --legacy-split-root to each graph summary panel.",
+    )
+    parser.add_argument(
+        "--aux-checkpoint",
+        default=None,
+        help="Optional aux-supervised checkpoint. When provided, predicted segmentation/heatmap/edge-direction panels are appended.",
+    )
+    parser.add_argument(
+        "--aux-weights",
+        default="auto",
+        choices=("auto", "ema", "model"),
+        help="Checkpoint weights to load for --aux-checkpoint.",
+    )
+    parser.add_argument("--aux-legacy-key", default="net", help="Legacy checkpoint state_dict key for --aux-checkpoint")
+    parser.add_argument("--aux-strict", action="store_true", help="Use strict aux checkpoint loading")
+    parser.add_argument(
+        "--aux-loader",
+        default="auto",
+        choices=("auto", "legacy", "fast-seg"),
+        help="Target loader for dense aux maps. auto uses the aux checkpoint DATA.FAST_SEGMENTATION_LOADER flag.",
+    )
+    parser.add_argument(
+        "--aux-max-size",
+        type=int,
+        default=None,
+        help="Max image size for dense aux target/prediction panels. Defaults to --max-size, then 128.",
+    )
+    parser.add_argument(
+        "--aux-show-untrained-maps",
+        action="store_true",
+        help="Render aux heatmap/edge-direction predictions even when the aux checkpoint loss weights are zero.",
+    )
     return parser
 
 
@@ -556,6 +720,29 @@ def main() -> None:
             legacy_key=str(args.legacy_key),
         )
         print(f"  {run.label}: {run.checkpoint} mode={run.mode} weights={args.weights}")
+
+    aux_context: AuxDiagnosticContext | None = None
+    if args.include_aux_maps or args.aux_checkpoint:
+        if not args.legacy_split_root:
+            raise ValueError("--include-aux-maps and --aux-checkpoint require --legacy-split-root")
+        aux_checkpoint = Path(args.aux_checkpoint) if args.aux_checkpoint else None
+        if aux_checkpoint is not None and not aux_checkpoint.is_file():
+            raise FileNotFoundError(f"aux checkpoint not found: {aux_checkpoint}")
+        aux_context = build_aux_diagnostic_context(
+            split_root=Path(args.legacy_split_root),
+            checkpoint_path=aux_checkpoint,
+            max_size=int(args.aux_max_size or args.max_size or 128),
+            loader=str(args.aux_loader),
+            weights=str(args.aux_weights),
+            legacy_key=str(args.aux_legacy_key),
+            strict=bool(args.aux_strict),
+            device=device,
+            show_untrained_maps=bool(args.aux_show_untrained_maps),
+        )
+        prediction_state = "with predictions" if aux_context.model is not None else "targets only"
+        print(
+            f"  Aux diagnostics: {len(aux_context.samples_by_name)} samples via {aux_context.loader_name} loader ({prediction_state})"
+        )
 
     image_paths = discover_images(image_dir, recursive=bool(args.recursive))
     if args.limit is not None and args.limit > 0:
@@ -607,6 +794,29 @@ def main() -> None:
                     inset_scale=args.inset_scale,
                 )
             )
+
+        if aux_context is not None:
+            aux_sample = aux_context.samples_by_name.get(image_path.stem)
+            if aux_sample is None:
+                print(f"[WARN] no aux-map sample found for image stem: {image_path.stem}")
+            else:
+                aux_image, aux_pafs, aux_segmentation, aux_heatmap = aux_sample
+                aux_prediction = predict_aux_diagnostics(
+                    aux_context,
+                    aux_image,
+                    target_size=(int(aux_segmentation.shape[-2]), int(aux_segmentation.shape[-1])),
+                )
+                panels.extend(
+                    make_aux_diagnostic_panels(
+                        image=aux_image,
+                        gt_segmentation=aux_segmentation,
+                        gt_heatmap=aux_heatmap,
+                        gt_paf=aux_pafs,
+                        prediction=aux_prediction,
+                        show_heatmap=aux_context.show_heatmap,
+                        show_paf=aux_context.show_paf,
+                    )
+                )
 
         panel = make_panel_grid(
             panels,

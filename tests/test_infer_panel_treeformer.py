@@ -9,6 +9,7 @@ from infer_panel_treeformer import (
     draw_graph_overlay,
     load_config_for_run,
     load_legacy_pt,
+    make_aux_diagnostic_panels,
     make_panel_grid,
     parse_run_spec,
     save_graph_json,
@@ -112,6 +113,69 @@ def test_panel_rendering_and_graph_json_outputs(tmp_path: Path):
     assert panel_path.is_file()
     assert panel.size[0] > 0
     assert '"Prediction"' in graph_path.read_text(encoding="utf-8")
+
+
+def test_make_aux_diagnostic_panels_renders_targets_and_predictions():
+    image = torch.zeros(3, 16, 20)
+    gt_segmentation = torch.zeros(16, 20)
+    gt_segmentation[4:12, 5:15] = 1.0
+    gt_heatmap = torch.zeros(16, 20)
+    gt_heatmap[8, 10] = 1.0
+    gt_paf = torch.zeros(2, 16, 20)
+    gt_paf[0, 4:12, 5:15] = 1.0
+    prediction = {
+        "segmentation": gt_segmentation.clone(),
+        "heatmap": gt_heatmap.clone(),
+        "paf": gt_paf.clone(),
+    }
+
+    panels = make_aux_diagnostic_panels(
+        image=image,
+        gt_segmentation=gt_segmentation,
+        gt_heatmap=gt_heatmap,
+        gt_paf=gt_paf,
+        prediction=prediction,
+        show_heatmap=True,
+        show_paf=True,
+    )
+
+    assert len(panels) == 6
+    assert all(panel.mode == "RGB" for panel in panels)
+
+
+def test_make_aux_diagnostic_panels_can_render_targets_only():
+    panels = make_aux_diagnostic_panels(
+        image=torch.zeros(3, 8, 8),
+        gt_segmentation=torch.zeros(8, 8),
+        gt_heatmap=torch.zeros(8, 8),
+        gt_paf=torch.zeros(2, 8, 8),
+        prediction=None,
+        show_heatmap=True,
+        show_paf=True,
+    )
+
+    assert len(panels) == 3
+
+
+def test_make_aux_diagnostic_panels_masks_predicted_paf_by_predicted_segmentation():
+    prediction = {
+        "segmentation": torch.zeros(8, 8),
+        "heatmap": torch.zeros(8, 8),
+        "paf": torch.ones(2, 8, 8),
+    }
+
+    panels = make_aux_diagnostic_panels(
+        image=torch.zeros(3, 8, 8),
+        gt_segmentation=torch.zeros(8, 8),
+        gt_heatmap=torch.zeros(8, 8),
+        gt_paf=torch.zeros(2, 8, 8),
+        prediction=prediction,
+        show_heatmap=False,
+        show_paf=True,
+    )
+
+    pred_edge_panel = np.asarray(panels[-1])[34:, :, :]
+    assert pred_edge_panel.max() == 0
 
 
 def test_save_graph_json_includes_virtual_root_details(tmp_path: Path):

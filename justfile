@@ -58,6 +58,12 @@ infer-panels:
     @test -n "${TREEFORMER_INFER_CHECKPOINT:-}" || (echo "Set TREEFORMER_INFER_CHECKPOINT to best.pt or another checkpoint" >&2; exit 2)
     @PYTHONPATH=. CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0} {{python}} infer_panel_treeformer.py --legacy-split-root "{{private_treeformer_data}}/val" --output-dir "${TREEFORMER_INFER_OUTPUT:-{{assets_root}}/inference_panels}" --run "${TREEFORMER_INFER_LABEL:-Ours}|${TREEFORMER_INFER_CHECKPOINT}|${TREEFORMER_INFER_MODE:-mst}" --device cuda --max-size 128 --inset --save-graph-json
 
+infer-panels-with-aux:
+    @test -n "{{private_treeformer_data}}" || (echo "Set TREEFORMER_PRIVATE_DATA to a legacy TreeFormer dataset root" >&2; exit 2)
+    @test -n "${TREEFORMER_INFER_CHECKPOINT:-}" || (echo "Set TREEFORMER_INFER_CHECKPOINT to graph best.pt or another checkpoint" >&2; exit 2)
+    @test -n "${TREEFORMER_INFER_AUX_CHECKPOINT:-${TREEFORMER_AUX_CHECKPOINT:-}}" || (echo "Set TREEFORMER_INFER_AUX_CHECKPOINT or TREEFORMER_AUX_CHECKPOINT to an aux-supervised checkpoint" >&2; exit 2)
+    @AUX_CHECKPOINT="${TREEFORMER_INFER_AUX_CHECKPOINT:-${TREEFORMER_AUX_CHECKPOINT:-}}"; PYTHONPATH=. CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0} {{python}} infer_panel_treeformer.py --legacy-split-root "{{private_treeformer_data}}/val" --output-dir "${TREEFORMER_INFER_OUTPUT:-{{assets_root}}/inference_panels_with_aux}" --run "${TREEFORMER_INFER_LABEL:-Ours}|${TREEFORMER_INFER_CHECKPOINT}|${TREEFORMER_INFER_MODE:-mst}" --device cuda --max-size "${TREEFORMER_MAX_SIZE:-128}" --inset --save-graph-json --include-aux-maps --aux-checkpoint "$AUX_CHECKPOINT" --aux-weights "${TREEFORMER_INFER_AUX_WEIGHTS:-model}" --aux-loader "${TREEFORMER_INFER_AUX_LOADER:-auto}" --aux-max-size "${TREEFORMER_AUX_MAX_SIZE:-${TREEFORMER_MAX_SIZE:-128}}" --columns "${TREEFORMER_INFER_COLUMNS:-3}" --panel-width "${TREEFORMER_PANEL_WIDTH:-360}"
+
 infer-aux-panels:
     @test -n "{{private_treeformer_data}}" || (echo "Set TREEFORMER_PRIVATE_DATA to a legacy TreeFormer dataset root" >&2; exit 2)
     @test -n "${TREEFORMER_AUX_CHECKPOINT:-}" || (echo "Set TREEFORMER_AUX_CHECKPOINT to an aux-supervised best.pt or last.pt checkpoint" >&2; exit 2)

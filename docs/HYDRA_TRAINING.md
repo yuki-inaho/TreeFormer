@@ -429,6 +429,19 @@ export TREEFORMER_INFER_OUTPUT=${TREEFORMER_ASSETS_ROOT:-../TreeFormer_assets}/i
 just infer-panels
 ```
 
+To combine graph overlays with dense diagnostics in the same summary panel, pass an aux-supervised checkpoint separately. This is useful when the graph stage was trained without an aux head, but you still want to inspect segmentation, node heatmap, and PAF / edge-direction maps beside the graph result:
+
+```bash
+export TREEFORMER_INFER_CHECKPOINT=<graph_stage_best_checkpoint>
+export TREEFORMER_INFER_AUX_CHECKPOINT=<aux_stage_best_checkpoint>
+export TREEFORMER_INFER_OUTPUT=${TREEFORMER_ASSETS_ROOT:-../TreeFormer_assets}/inference_panels_with_aux/<stage_name>
+export TREEFORMER_MAX_SIZE=512
+
+just infer-panels-with-aux
+```
+
+`infer-panels-with-aux` appends GT / predicted segmentation overlays, GT / predicted node heatmaps, and GT / predicted edge-direction maps to each graph summary image. Heatmap or PAF prediction panels are hidden automatically when the aux checkpoint recorded a zero loss weight for that target; pass `--aux-show-untrained-maps` only when debugging raw, untrained channels.
+
 The recipe renders the validation split as:
 
 ```bash
