@@ -196,6 +196,16 @@ split root の基本構造:
   - raw Guyot extracted dataset: `${TREEFORMER_GUYOT_DATA}` or `${TREEFORMER_ASSETS_ROOT}/datasets/3D2cut_Single_Guyot_extracted`
   - pretrained weights: `${TREEFORMER_ASSETS_ROOT}/pretrained_weights/fork_source_main`
   - smoke outputs: `${TREEFORMER_ASSETS_ROOT}/trained_weights_smoke`
+
+- **実行環境の注意（venv が 2 つある）:**
+  - 学習・推論・CUDA ops が動くのは repo 外の `${TREEFORMER_PYTHON:-../venv/TreeFormer/bin/python}` (Python 3.10) だけ。`MultiScaleDeformableAttention` の `.so` はこの venv の `site-packages` に直接置かれており、`uv.lock` にも `pip` metadata にも現れない。
+  - repo 内 `.venv` (Python 3.11) は `uv` が作った器で、CUDA ops をビルドしていない。素の `uv sync` はこちらを対象にするため、実行環境は更新されない。`.venv` で `train_hydra.py` を動かすと deformable attention の import で落ちる。
+  - optional group を実行環境へ入れるときは Python を明示する: `uv pip install --python "$TREEFORMER_PYTHON" --project . --group tuning`。`uv sync` は既定で lock にないパッケージを削除するので、実行環境に対して使うなら `--inexact` を付ける。
+  - `.so` は ABI タグ `cp310` に固定されている。Python を変える venv 移行を行う場合は `models/ops` の再ビルドと `MultiScaleDeformableAttention` の import / forward check が必須。
+
+- **`just` の PATH:**
+  - 本書と `docs/HYDRA_TRAINING.md` の手順はほぼすべて `just` 前提だが、`just` は `~/.cargo/bin/just` にあり、非ログインシェルでは PATH に載らないことがある。最初に `command -v just` で確認し、無ければ `export PATH="$HOME/.cargo/bin:$PATH"` を通す。
+
 - **代表的なコマンド:**
 
 ```bash

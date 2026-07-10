@@ -1,0 +1,19 @@
+# @package _global_
+DATA:
+  DIM: 2
+  BATCH_SIZE: 1
+  MAX_SIZE: 256
+  DATA_PATH: ${oc.env:TREEFORMER_GUYOT_DATA,${oc.env:TREEFORMER_ASSETS_ROOT,../TreeFormer_assets}/datasets/3D2cut_Single_Guyot_extracted}
+  DATASET: guyot-2D
+  TRAIN_SPLIT: train
+  VAL_SPLIT: test
+  TRAIN_LIMIT: null
+  VAL_LIMIT: null
+  IMG_SIZE: [256, 256]
+  NUM_WORKERS: 0
+  SEED: 3407
+  FAST_SEGMENTATION_LOADER: false
+  SEG_CACHE_MODE: none
+  SEG_CACHE_ROOT: ${oc.env:TREEFORMER_SEG_CACHE_ROOT,${oc.env:TREEFORMER_ASSETS_ROOT,../TreeFormer_assets}/cache/fast_seg}
+  PERSISTENT_WORKERS: false
+  PREFETCH_FACTOR: 2

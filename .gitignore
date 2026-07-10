@@ -1,10 +1,12 @@
-# Repo-local assets and generated data
-TreeFormer_assets/
-data/
-datasets/
-trained_weights/
-runs/
-outputs/
+# Repo-local assets and generated data.
+# Anchored to the repo root: unanchored `data/` also matched `conf/data/`,
+# which silently kept the Hydra data config group out of Git.
+/TreeFormer_assets/
+/data/
+/datasets/
+/trained_weights/
+/runs/
+/outputs/
 
 # Local secrets and machine-specific environment
 .env

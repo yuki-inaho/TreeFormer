@@ -406,12 +406,15 @@ just cfg-private-curriculum-stage1
 | `data` | `guyot_smoke`, `guyot_full` | Guyot dataset paths, limits, workers, seed |
 | `augmentation` | `disabled`, `photometric_opencv`, `regularized`, `regularized_albumentationsx`, `geometry_mild` | Image-only photometric DA and graph-aware affine / elastic DA |
 | `model` | `treeformer_2d` | Existing 2D TreeFormer architecture settings |
-| `train` | `default`, `dry_run`, `seg_supervised`, `aux_supervised` | Epochs, loss weights, LR, save path, graph-vs-aux training mode |
+| `train` | `default`, `dry_run`, `seg_only`, `seg_heatmap`, `seg_heatmap_paf`, `seg_supervised`, `aux_supervised`, `virtual_root`, `joint_virtual_root_aux` | Epochs, loss weights, LR, save path, graph-vs-aux training mode |
 | `optimizer` | `adamw_step`, `schedulefree_adamw`, `muon_schedulefree` | Optimizer and scheduler selection |
 | `logging` | `tensorboard`, `disabled` | TensorBoard event writing |
 | `ema` | `disabled`, `default` | EMA update/evaluation behavior |
 | `checkpoint` | `default` | last/best/periodic checkpoint policy |
 | `distributed` | `single`, `ddp` | Single-process or torchrun/DDP execution |
+| `ablation` | `heatmap_mse_baseline`, `heatmap_sigma1_5_mse`, `heatmap_focal`, `heatmap_focal_ridge`, `heatmap_focal_ridge_seg_low` | Opt-in dense aux ablation overrides, applied as `+ablation=<name>` |
+
+The `data` group lives in `conf/data/` and is required by `conf/config.yaml` defaults. It is tracked in Git; a checkout missing it cannot compose any Hydra config.
 
 ## Aux Inference Panels
 
