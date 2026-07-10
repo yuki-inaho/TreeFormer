@@ -103,3 +103,26 @@ def test_relationformer_omits_root_logits_by_default():
     _h, out = model([torch.zeros((3, 32, 32), dtype=torch.float32)])
 
     assert "pred_root_logits" not in out
+
+
+def test_relationformer_can_condition_graph_features_on_aux_trunk():
+    from models.relationformer_2D import RelationFormer
+
+    cfg = _config(root_head_enabled=False)
+    cfg.MODEL.AUX_HEAD = SimpleNamespace(
+        ENABLED=True,
+        HIDDEN_DIM=8,
+        OUT_CHANNELS=5,
+        GRAPH_CONDITIONING="aux_feature",
+    )
+    model = RelationFormer(
+        DummyEncoder(cfg.MODEL.DECODER.HIDDEN_DIM),
+        DummyDecoder(cfg.MODEL.DECODER.OBJ_TOKEN + cfg.MODEL.DECODER.RLN_TOKEN, cfg.MODEL.DECODER.HIDDEN_DIM),
+        cfg,
+        _args(),
+    )
+
+    _h, out = model([torch.zeros((3, 32, 32), dtype=torch.float32)])
+
+    assert model.aux_graph_conditioning is not None
+    assert out["aux_maps"].shape[1] == 5

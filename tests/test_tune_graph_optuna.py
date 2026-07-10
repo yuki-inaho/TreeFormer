@@ -103,7 +103,36 @@ def test_baseline_trial_params_match_the_shipped_joint_config():
     assert float(train["W_AUX_HEATMAP_MSE"]) == 1.0
     assert float(train["W_AUX_HEATMAP_FOCAL"]) == 0.0
     assert float(train["W_AUX_HEATMAP_RIDGE"]) == 0.0
+    assert float(train["W_AUX_HEATMAP_COORD"]) == 0.0
+    assert float(train["W_AUX_HEATMAP_COORD_VAR"]) == 0.0
+    assert float(train["W_AUX_HEATMAP_PEAK"]) == 0.0
     assert params["heatmap_profile"] == "mse_baseline"
+
+
+def test_peak_focused_profile_matches_opt_in_ablation_recipe():
+    conf = yaml.safe_load(Path("conf/ablation/heatmap_peak_focused.yaml").read_text())
+    train = conf["TRAIN"]
+
+    params = baseline_trial_params()
+    params["heatmap_profile"] = "peak_focused"
+    fixed_trial = optuna.trial.FixedTrial(params)
+    overrides = suggest_overrides(fixed_trial)
+
+    # Six sub-weights the peak-focused recipe pins; "TRAIN.W_AUX_HEATMAP=" (the
+    # top-level task weight, no trailing underscore) is a separate suggested
+    # param and must not be swept in here.
+    heatmap_weight_overrides = {
+        override for override in overrides if override.split("=", 1)[0].startswith("TRAIN.W_AUX_HEATMAP_")
+    }
+    expected = {
+        f"TRAIN.W_AUX_HEATMAP_MSE={float(train['W_AUX_HEATMAP_MSE'])}",
+        f"TRAIN.W_AUX_HEATMAP_FOCAL={float(train['W_AUX_HEATMAP_FOCAL'])}",
+        f"TRAIN.W_AUX_HEATMAP_RIDGE={float(train['W_AUX_HEATMAP_RIDGE'])}",
+        f"TRAIN.W_AUX_HEATMAP_COORD={float(train['W_AUX_HEATMAP_COORD'])}",
+        f"TRAIN.W_AUX_HEATMAP_COORD_VAR={float(train['W_AUX_HEATMAP_COORD_VAR'])}",
+        f"TRAIN.W_AUX_HEATMAP_PEAK={float(train['W_AUX_HEATMAP_PEAK'])}",
+    }
+    assert heatmap_weight_overrides == expected
 
 
 def test_baseline_params_are_reachable_from_the_search_space():

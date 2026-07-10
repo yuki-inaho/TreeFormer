@@ -18,7 +18,7 @@ from .virtual_root import load_forest_metadata
 
 
 IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp")
-CACHE_FORMAT_VERSION = 2
+CACHE_FORMAT_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -158,6 +158,10 @@ def _cache_config(*, resize_policy: str, aux_target_config: AuxMapTargetConfig) 
             "heatmap_cutoff": aux_target_config.heatmap_cutoff,
             "paf_line_thickness": aux_target_config.paf_line_thickness,
             "paf_mask_thickness": aux_target_config.paf_mask_thickness,
+            "direction_target_source": aux_target_config.direction_target_source,
+            "direction_encoding": aux_target_config.direction_encoding,
+            "direction_tangent_radius": aux_target_config.direction_tangent_radius,
+            "direction_junction_exclusion_radius": aux_target_config.direction_junction_exclusion_radius,
         },
     }
 
@@ -185,6 +189,10 @@ def build_fast_seg_cache(
     heatmap_cutoff: float = 0.01,
     paf_line_thickness: int = 2,
     paf_mask_thickness: int = 6,
+    direction_target_source: str = "graph_edges",
+    direction_encoding: str = "vector",
+    direction_tangent_radius: int = 8,
+    direction_junction_exclusion_radius: int = 6,
     strict_virtual_root_metadata: bool = False,
     overwrite: bool = False,
 ) -> dict[str, int]:
@@ -197,6 +205,10 @@ def build_fast_seg_cache(
         heatmap_cutoff=heatmap_cutoff,
         paf_line_thickness=paf_line_thickness,
         paf_mask_thickness=paf_mask_thickness,
+        direction_target_source=direction_target_source,
+        direction_encoding=direction_encoding,
+        direction_tangent_radius=direction_tangent_radius,
+        direction_junction_exclusion_radius=direction_junction_exclusion_radius,
     )
     cache_config = _cache_config(resize_policy=resize_policy, aux_target_config=aux_target_config)
     written = 0
@@ -221,6 +233,7 @@ def build_fast_seg_cache(
             edges,
             image_size=(int(segmentation.shape[-2]), int(segmentation.shape[-1])),
             config=aux_target_config,
+            segmentation=segmentation,
         )
         payload = {
             "sample_id": sample.sample_id,
@@ -259,6 +272,10 @@ class FastSegSupervisedDataset(Dataset):
         heatmap_cutoff: float = 0.01,
         paf_line_thickness: int = 2,
         paf_mask_thickness: int = 6,
+        direction_target_source: str = "graph_edges",
+        direction_encoding: str = "vector",
+        direction_tangent_radius: int = 8,
+        direction_junction_exclusion_radius: int = 6,
         return_forest_metadata: bool = False,
         strict_virtual_root_metadata: bool = False,
     ) -> None:
@@ -282,6 +299,10 @@ class FastSegSupervisedDataset(Dataset):
             heatmap_cutoff=heatmap_cutoff,
             paf_line_thickness=paf_line_thickness,
             paf_mask_thickness=paf_mask_thickness,
+            direction_target_source=direction_target_source,
+            direction_encoding=direction_encoding,
+            direction_tangent_radius=direction_tangent_radius,
+            direction_junction_exclusion_radius=direction_junction_exclusion_radius,
         )
         self.cache_config = _cache_config(resize_policy=self.resize_policy, aux_target_config=self.aux_target_config)
         self._memory_cache: dict[int, tuple[Any, ...]] = {}
@@ -370,6 +391,7 @@ class FastSegSupervisedDataset(Dataset):
                 edges,
                 image_size=(height, width),
                 config=self.aux_target_config,
+                segmentation=segmentation,
             )
         else:
             pafs = cached_pafs
@@ -411,6 +433,10 @@ def main() -> None:
     parser.add_argument("--heatmap-cutoff", type=float, default=0.01)
     parser.add_argument("--paf-line-thickness", type=int, default=2)
     parser.add_argument("--paf-mask-thickness", type=int, default=6)
+    parser.add_argument("--direction-target-source", choices=["graph_edges", "mask_skeleton"], default="graph_edges")
+    parser.add_argument("--direction-encoding", choices=["vector", "double_angle"], default="vector")
+    parser.add_argument("--direction-tangent-radius", type=int, default=8)
+    parser.add_argument("--direction-junction-exclusion-radius", type=int, default=6)
     parser.add_argument("--strict-virtual-root-metadata", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()
@@ -429,6 +455,10 @@ def main() -> None:
             heatmap_cutoff=float(args.heatmap_cutoff),
             paf_line_thickness=int(args.paf_line_thickness),
             paf_mask_thickness=int(args.paf_mask_thickness),
+            direction_target_source=str(args.direction_target_source),
+            direction_encoding=str(args.direction_encoding),
+            direction_tangent_radius=int(args.direction_tangent_radius),
+            direction_junction_exclusion_radius=int(args.direction_junction_exclusion_radius),
             strict_virtual_root_metadata=bool(args.strict_virtual_root_metadata),
             overwrite=bool(args.overwrite),
         )

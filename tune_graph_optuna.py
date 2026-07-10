@@ -116,34 +116,51 @@ def suggest_overrides(trial: Any) -> list[str]:
     w_aux_detail = trial.suggest_categorical("w_aux_detail", [0.0, 0.05, 0.1])
     heatmap_profile = trial.suggest_categorical(
         "heatmap_profile",
-        ["mse_baseline", "sigma1_5_mse", "focal", "focal_ridge"],
+        ["peak_focused", "peak_focused_sigma1_5", "focal_ridge", "mse_baseline"],
     )
     clip_max_norm = trial.suggest_categorical("clip_max_norm", [5.0, 10.0, 20.0])
 
+    # Each profile pins sigma plus all six heatmap loss weights, so profiles are
+    # self-contained and directly comparable across trials.
     heatmap_overrides = {
+        "peak_focused": [
+            "DATA.AUX_HEATMAP_SIGMA=3.0",
+            "TRAIN.W_AUX_HEATMAP_MSE=0.25",
+            "TRAIN.W_AUX_HEATMAP_FOCAL=1.0",
+            "TRAIN.W_AUX_HEATMAP_RIDGE=0.05",
+            "TRAIN.W_AUX_HEATMAP_COORD=0.05",
+            "TRAIN.W_AUX_HEATMAP_COORD_VAR=0.001",
+            "TRAIN.W_AUX_HEATMAP_PEAK=0.05",
+        ],
+        "peak_focused_sigma1_5": [
+            "DATA.AUX_HEATMAP_SIGMA=1.5",
+            "TRAIN.W_AUX_HEATMAP_MSE=0.25",
+            "TRAIN.W_AUX_HEATMAP_FOCAL=1.0",
+            "TRAIN.W_AUX_HEATMAP_RIDGE=0.05",
+            "TRAIN.W_AUX_HEATMAP_COORD=0.05",
+            "TRAIN.W_AUX_HEATMAP_COORD_VAR=0.001",
+            "TRAIN.W_AUX_HEATMAP_PEAK=0.05",
+        ],
+        # Isolates the coord/var/peak contribution: same focal+ridge shape as
+        # peak_focused, with the coord/peak terms switched off.
+        "focal_ridge": [
+            "DATA.AUX_HEATMAP_SIGMA=3.0",
+            "TRAIN.W_AUX_HEATMAP_MSE=0.25",
+            "TRAIN.W_AUX_HEATMAP_FOCAL=1.0",
+            "TRAIN.W_AUX_HEATMAP_RIDGE=0.1",
+            "TRAIN.W_AUX_HEATMAP_COORD=0.0",
+            "TRAIN.W_AUX_HEATMAP_COORD_VAR=0.0",
+            "TRAIN.W_AUX_HEATMAP_PEAK=0.0",
+        ],
+        # Pre-change behavior, kept as an ablation control.
         "mse_baseline": [
             "DATA.AUX_HEATMAP_SIGMA=3.0",
             "TRAIN.W_AUX_HEATMAP_MSE=1.0",
             "TRAIN.W_AUX_HEATMAP_FOCAL=0.0",
             "TRAIN.W_AUX_HEATMAP_RIDGE=0.0",
-        ],
-        "sigma1_5_mse": [
-            "DATA.AUX_HEATMAP_SIGMA=1.5",
-            "TRAIN.W_AUX_HEATMAP_MSE=1.0",
-            "TRAIN.W_AUX_HEATMAP_FOCAL=0.0",
-            "TRAIN.W_AUX_HEATMAP_RIDGE=0.0",
-        ],
-        "focal": [
-            "DATA.AUX_HEATMAP_SIGMA=1.5",
-            "TRAIN.W_AUX_HEATMAP_MSE=0.25",
-            "TRAIN.W_AUX_HEATMAP_FOCAL=1.0",
-            "TRAIN.W_AUX_HEATMAP_RIDGE=0.0",
-        ],
-        "focal_ridge": [
-            "DATA.AUX_HEATMAP_SIGMA=1.5",
-            "TRAIN.W_AUX_HEATMAP_MSE=0.25",
-            "TRAIN.W_AUX_HEATMAP_FOCAL=1.0",
-            "TRAIN.W_AUX_HEATMAP_RIDGE=0.1",
+            "TRAIN.W_AUX_HEATMAP_COORD=0.0",
+            "TRAIN.W_AUX_HEATMAP_COORD_VAR=0.0",
+            "TRAIN.W_AUX_HEATMAP_PEAK=0.0",
         ],
     }[heatmap_profile]
 

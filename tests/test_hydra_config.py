@@ -67,6 +67,11 @@ def test_joint_skipped_epoch_metrics_keep_graph_and_aux_training_values():
             "aux_detail_total": 10.0,
             "aux_heatmap_total": 11.0,
             "aux_paf_l1": 12.0,
+            "aux_heatmap_coord": 13.0,
+            "aux_heatmap_coord_var": 14.0,
+            "aux_heatmap_peak": 15.0,
+            "aux_paf_total": 16.0,
+            "aux_paf_angular": 17.0,
         },
         lr=1e-4,
         epoch_seconds=2.5,
@@ -94,6 +99,11 @@ def test_joint_skipped_epoch_metrics_expose_the_same_train_tags_as_validation_ep
         "aux_detail_total": 10.0,
         "aux_heatmap_total": 11.0,
         "aux_paf_l1": 12.0,
+        "aux_heatmap_coord": 13.0,
+        "aux_heatmap_coord_var": 14.0,
+        "aux_heatmap_peak": 15.0,
+        "aux_paf_total": 16.0,
+        "aux_paf_angular": 17.0,
     }
     skipped = _train_only_metrics(mode="joint", train_metrics=train_metrics, lr=1e-4, epoch_seconds=2.5)
     validated = _joint_metrics_dict(
@@ -112,6 +122,14 @@ def test_joint_skipped_epoch_metrics_expose_the_same_train_tags_as_validation_ep
             "heatmap_peak_mean": 0.2,
             "heatmap_nonpeak_foreground_mean": 0.1,
             "heatmap_peak_contrast": 0.1,
+            "heatmap_coord": 0.05,
+            "heatmap_coord_var": 0.02,
+            "heatmap_peak": 0.03,
+            "paf_angular": 0.04,
+            "heatmap_node_recall": 0.9,
+            "heatmap_node_precision": 0.85,
+            "heatmap_duplicate_peak_rate": 0.01,
+            "heatmap_background_peaks_per_image": 0.5,
             "paf_masked_l1": 0.3,
         },
         lr=1e-4,
@@ -308,8 +326,11 @@ def test_hydra_seg_heatmap_training_adds_node_heatmap_objective():
     assert cfg.TRAIN.W_AUX_HEATMAP_MSE == 1.0
     assert cfg.TRAIN.W_AUX_HEATMAP_FOCAL == 0.0
     assert cfg.TRAIN.W_AUX_HEATMAP_RIDGE == 0.0
+    assert cfg.TRAIN.AUX_HEATMAP_FOCAL_POS_SOURCE == "threshold"
+    assert cfg.TRAIN.W_AUX_HEATMAP_COORD == 0.0
+    assert cfg.TRAIN.W_AUX_HEATMAP_PEAK == 0.0
     assert cfg.TRAIN.AUX_HEATMAP_MASK_SOURCE == "segmentation"
-    assert cfg.TRAIN.AUX_HEATMAP_MASK_OUTSIDE_WEIGHT == 0.05
+    assert cfg.TRAIN.AUX_HEATMAP_MASK_OUTSIDE_WEIGHT == 0.0
     assert cfg.TRAIN.W_AUX_PAF == 0.0
     assert cfg.DATA.AUX_TARGET_MODE == "seg_heatmap"
     assert cfg.DATA.AUX_HEATMAP_SIGMA == 3.0
@@ -329,15 +350,34 @@ def test_hydra_seg_heatmap_paf_training_adds_edge_direction_objective():
     assert cfg.TRAIN.W_AUX_HEATMAP_MSE == 1.0
     assert cfg.TRAIN.W_AUX_HEATMAP_FOCAL == 0.0
     assert cfg.TRAIN.W_AUX_HEATMAP_RIDGE == 0.0
+    assert cfg.TRAIN.AUX_HEATMAP_FOCAL_POS_SOURCE == "threshold"
+    assert cfg.TRAIN.W_AUX_HEATMAP_COORD == 0.0
+    assert cfg.TRAIN.W_AUX_HEATMAP_PEAK == 0.0
     assert cfg.TRAIN.AUX_HEATMAP_MASK_SOURCE == "segmentation"
-    assert cfg.TRAIN.AUX_HEATMAP_MASK_OUTSIDE_WEIGHT == 0.05
+    assert cfg.TRAIN.AUX_HEATMAP_MASK_OUTSIDE_WEIGHT == 0.0
     assert cfg.TRAIN.W_AUX_PAF == 0.25
+    assert cfg.TRAIN.W_AUX_PAF_L1 == 1.0
+    assert cfg.TRAIN.W_AUX_PAF_ANGULAR == 0.25
     assert cfg.TRAIN.AUX_PAF_MASK_SOURCE == "paf_and_segmentation"
+    assert cfg.TRAIN.AUX_DIRECTION_ENCODING == "double_angle"
     assert cfg.DATA.AUX_TARGET_MODE == "seg_heatmap_paf"
     assert cfg.MODEL.GRAPH_OUTPUT_ENABLED is False
     assert cfg.MODEL.AUX_HEAD.OUT_CHANNELS == 5
     assert cfg.checkpoint.metric_name == "val/aux_total_loss"
     assert cfg.checkpoint.mode == "min"
+
+
+def test_heatmap_peak_focused_ablation_is_opt_in():
+    with initialize_config_dir(version_base="1.3", config_dir=str(CONF_DIR)):
+        cfg = compose(config_name="config", overrides=["train=seg_heatmap_paf", "+ablation=heatmap_peak_focused"])
+
+    assert cfg.TRAIN.W_AUX_HEATMAP_MSE == 0.25
+    assert cfg.TRAIN.W_AUX_HEATMAP_FOCAL == 1.0
+    assert cfg.TRAIN.W_AUX_HEATMAP_RIDGE == 0.05
+    assert cfg.TRAIN.W_AUX_HEATMAP_COORD == 0.05
+    assert cfg.TRAIN.W_AUX_HEATMAP_COORD_VAR == 0.001
+    assert cfg.TRAIN.W_AUX_HEATMAP_PEAK == 0.05
+    assert cfg.TRAIN.AUX_HEATMAP_FOCAL_POS_SOURCE == "target_peaks"
 
 
 def test_hydra_heatmap_ablation_group_overrides_loss_shape():
@@ -398,14 +438,18 @@ def test_hydra_joint_virtual_root_aux_config_enables_graph_and_all_aux_heads():
     assert cfg.TRAIN.W_AUX_PAF > 0.0
     assert cfg.TRAIN.AUX_HEATMAP_MASK_SOURCE == "segmentation"
     assert cfg.TRAIN.AUX_PAF_MASK_SOURCE == "paf_and_segmentation"
+    assert cfg.TRAIN.AUX_DIRECTION_ENCODING == "double_angle"
     assert cfg.DATA.FOREST_METADATA is True
     assert cfg.DATA.STRICT_VIRTUAL_ROOT_METADATA is True
     assert cfg.DATA.FAST_SEGMENTATION_LOADER is True
     assert cfg.DATA.AUX_TARGET_MODE == "seg_heatmap_paf"
+    assert cfg.DATA.AUX_DIRECTION_TARGET_SOURCE == "mask_skeleton"
+    assert cfg.DATA.AUX_DIRECTION_ENCODING == "double_angle"
     assert cfg.MODEL.GRAPH_OUTPUT_ENABLED is True
     assert cfg.MODEL.ROOT_HEAD.ENABLED is True
     assert cfg.MODEL.AUX_HEAD.ENABLED is True
     assert cfg.MODEL.AUX_HEAD.OUT_CHANNELS == 5
+    assert cfg.MODEL.AUX_HEAD.GRAPH_CONDITIONING == "aux_feature"
     assert cfg.checkpoint.metric_name == "val/smd"
 
     legacy = make_legacy_config(cfg)

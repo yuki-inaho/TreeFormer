@@ -147,11 +147,13 @@ Operational notes:
 - `DATA.SEGMENTATION_TARGET_SOURCE=external_mask` is expected for `train=seg_supervised` and `train=aux_supervised`. Missing `seg/<sample_id>.png` or legacy `unet/<sample_id>.png` is a configuration error, not a reason to fall back silently to graph-derived labels.
 - External mask images may be stored as `0/255` PNGs; the loader thresholds them to binary float targets before BCE / Dice / Focal loss, and the loss code rejects targets outside `[0, 1]`.
 - The default segmentation loss uses binary BCE + Dice with Focal disabled. `AUX_SEG_POS_WEIGHT=auto` is capped conservatively so rare foreground does not cause broad positive overprediction.
-- `train=seg_only`, `train=seg_heatmap`, and `train=seg_heatmap_paf` use `FastSegSupervisedDataset` by default. `DATA.AUX_TARGET_MODE=seg_only` returns zero-valued unused PAF/heatmap tensors. `DATA.AUX_TARGET_MODE=seg_heatmap` generates only node heatmap targets and leaves PAF tensors zero. `DATA.AUX_TARGET_MODE=seg_heatmap_paf` generates both node heatmap and PAF / edge-direction targets. For precomputed repo-external cache, use `just cache-private-fast-seg`, `just cache-private-fast-seg-heatmap`, or `just cache-private-fast-seg-heatmap-paf` respectively.
-- Heatmap and PAF supervision are segmentation-aware in the dense aux modes. `train=seg_heatmap` and `train=seg_heatmap_paf` use `AUX_HEATMAP_MASK_SOURCE=segmentation` with a small `AUX_HEATMAP_MASK_OUTSIDE_WEIGHT=0.05`, so node heatmap loss focuses on foreground while still weakly suppressing outside activations. `train=seg_heatmap_paf` also uses `AUX_PAF_MASK_SOURCE=paf_and_segmentation`, so edge-direction loss is evaluated on the graph PAF band intersected with the external segmentation mask.
-- Heatmap supervision is ablation-ready. The default remains Gaussian MSE with `W_AUX_HEATMAP_MSE=1`, `W_AUX_HEATMAP_FOCAL=0`, and `W_AUX_HEATMAP_RIDGE=0`. `+ablation=...` configs can switch to smaller Gaussian targets, CenterNet-style focal heatmap loss, foreground ridge suppression, or lower segmentation task weight without changing model architecture.
+- `train=seg_only`, `train=seg_heatmap`, and `train=seg_heatmap_paf` use `FastSegSupervisedDataset` by default. `DATA.AUX_TARGET_MODE=seg_only` returns zero-valued unused PAF/heatmap tensors. `DATA.AUX_TARGET_MODE=seg_heatmap` generates only node heatmap targets and leaves PAF tensors zero. `DATA.AUX_TARGET_MODE=seg_heatmap_paf` generates both node heatmap and direction targets. For precomputed repo-external cache, use `just cache-private-fast-seg`, `just cache-private-fast-seg-heatmap`, or `just cache-private-fast-seg-heatmap-paf` respectively.
+- Heatmap and direction supervision is restricted to the external segmentation foreground. `AUX_HEATMAP_MASK_OUTSIDE_WEIGHT=0` means heatmap loss ignores mask-outside pixels. `AUX_DIRECTION_TARGET_SOURCE=mask_skeleton` skeletonizes the external mask, estimates local tangents, and propagates them to the foreground using an EDT nearest-skeleton index map. Endpoint/junction neighborhoods are excluded because one direction cannot represent multiple branches. The default `AUX_DIRECTION_ENCODING=double_angle` stores `[cos(2*theta), sin(2*theta)]`, so opposite tangent signs are equivalent. The old sparse graph-edge PAF remains available only with explicit `graph_edges` selection.
+- Heatmap supervision is ablation-ready. The shipped `seg_heatmap` / `seg_heatmap_paf` / `joint_virtual_root_aux` configs keep the Gaussian MSE baseline (`W_AUX_HEATMAP_MSE=1`, focal/coord/peakness disabled) so comparisons remain interpretable. The opt-in `+ablation=heatmap_peak_focused` recipe enables target-local-peak focal positives, ridge suppression, local soft-argmax coordinate loss, variance suppression, and a peakness margin loss with conservative weights. This separates the documented proposal from the baseline until it demonstrates improved node recall/precision without reducing segmentation quality.
+- The recently added PAF angular direction loss is enabled at a modest weight in `seg_heatmap_paf` and `joint_virtual_root_aux`: `W_AUX_PAF_L1=1.0` keeps masked L1 as the primary PAF term, and `W_AUX_PAF_ANGULAR=0.25` adds a cosine-similarity direction loss on top.
+- New objective peak-quality validation metrics: `val/heatmap_node_recall`, `val/heatmap_node_precision`, `val/heatmap_duplicate_peak_rate`, and `val/heatmap_background_peaks_per_image`, evaluated with `AUX_HEATMAP_EVAL_PEAK_THRESHOLD` and `AUX_HEATMAP_EVAL_MATCH_RADIUS`. These directly measure whether the heatmap produces one clean peak per node rather than a ridge or multiple duplicate peaks. Predictions and target peaks are restricted to the configured segmentation foreground.
 - `train=seg_supervised` adds a weak optional STDC-style detail boundary auxiliary head as the fifth aux channel. Its target is a multi-scale Laplacian boundary map derived from the external segmentation mask, not a graph edge or PAF. `W_AUX_DETAIL=0.1` keeps it as a light boundary-sharpening regularizer while BCE + Dice segmentation remains the primary objective.
-- For full segmentation-only training, generate repo-external cache first with `just cache-private-fast-seg`, then run `just train-private-seg-supervised`. Cache format v2 omits the unused detail-boundary payload, so regenerate a cache made by an older format. Keep the worker count an explicit experiment variable: the measured local disk-cache joint workload is fastest with `DATA.NUM_WORKERS=0`, while uncached target generation benefits from workers. Set `TREEFORMER_SEG_CACHE_MODE=none` to bypass disk cache.
+- For full segmentation-only training, generate repo-external cache first with `just cache-private-fast-seg`, then run `just train-private-seg-supervised`. Cache format v3 includes the direction-target source/encoding and omits the unused detail-boundary payload, so regenerate older caches. Keep the worker count an explicit experiment variable: the measured local disk-cache joint workload is fastest with `DATA.NUM_WORKERS=0`, while uncached target generation benefits from workers. Set `TREEFORMER_SEG_CACHE_MODE=none` to bypass disk cache.
 - `FastSegSupervisedDataset` defaults to `DATA.SEG_RESIZE_POLICY=legacy_half`, matching the legacy loader behavior that halves the raw image before applying `DATA.MAX_SIZE`. For a raw 800x600 image, `DATA.MAX_SIZE=128` becomes 128x96 and `DATA.MAX_SIZE=512` still caps at 400x300. Use `DATA.SEG_RESIZE_POLICY=full` with `DATA.MAX_SIZE=512` to train at 512x384, or `DATA.SEG_RESIZE_POLICY=full` with `DATA.MAX_SIZE=800` to keep the original 800x600 shape.
 - Aux/seg stages may keep EMA updates enabled, but use `ema.evaluate=false` for validation and best-checkpoint selection because the aux head is newly initialized and `decay=0.9999` changes too slowly during short stages.
 - To initialize a dense stage from a previous Hydra `best.pt`, set `TREEFORMER_PRETRAINED_CHECKPOINT=<best.pt>` and `TREEFORMER_PRETRAINED_KEY=model`. Fork-source checkpoints keep the default `TREEFORMER_PRETRAINED_KEY=net`.
@@ -159,7 +161,9 @@ Operational notes:
 - In `train=seg_only` and `train=seg_supervised`, `W_AUX_HEATMAP=0` and `W_AUX_PAF=0`; heatmap and PAF channels are not trained in those stages. In `train=seg_heatmap`, `W_AUX_HEATMAP=1` and `W_AUX_PAF=0`. In `train=seg_heatmap_paf`, `W_AUX_HEATMAP=1` and `W_AUX_PAF=0.25`, so the edge-direction channels are trained together with segmentation and node heatmaps. The aux output layout is segmentation, heatmap, PAF-x, PAF-y, optional detail boundary. `train=aux_supervised` keeps the original 4-channel layout and has `W_AUX_DETAIL=0`.
 - Keep `DATA.BATCH_SIZE=12` and `DATA.MAX_SIZE=128` unless the GPU is shared or memory pressure is observed.
 - Monitor `val/seg_soft_dice_score`, `val/seg_dice_score`, `val/seg_iou`, `val/seg_precision`, `val/seg_recall`, `val/pred_positive_rate`, and when heatmap is enabled `val/masked_heatmap_mae`; do not interpret `val/smd` for this mode because graph validation is intentionally skipped. `val/seg_dice_score` and IoU are hard-threshold metrics at `AUX_SEG_THRESHOLD`; early runs may show zero while soft Dice and loss still improve.
-- For heatmap ablations, also monitor `val/heatmap_peak_contrast`, `val/heatmap_peak_mean`, and `val/heatmap_nonpeak_foreground_mean`. The desired direction is higher peak contrast while preserving segmentation IoU/Dice and keeping `val/paf_masked_l1` from regressing.
+- For heatmap/direction ablations, also monitor `val/heatmap_peak_contrast`, `val/heatmap_peak_mean`, `val/heatmap_nonpeak_foreground_mean`, and `val/direction_angular_error_deg`. The desired direction is higher peak contrast and lower angular error while preserving segmentation IoU/Dice. Direction metrics are computed only on the valid mask-skeleton foreground.
+
+The optional graph connection is controlled by `MODEL.AUX_HEAD.GRAPH_CONDITIONING`. `none` preserves the independent aux and graph paths. `aux_feature` injects the lightweight aux trunk feature into the first graph feature level through a learned residual projection; it does not concatenate full-resolution logits. `train=joint_virtual_root_aux` enables this connection for the graph stage.
 
 ## Dense Aux Ablation Study
 
@@ -174,6 +178,7 @@ Initial ablation matrix:
 | A2 | `+ablation=heatmap_focal` | 1.5 | `0.25*MSE + focal` | 1.0 | Does CenterNet-style focal loss improve point contrast without hurting segmentation? |
 | A3 | `+ablation=heatmap_focal_ridge` | 1.5 | `0.25*MSE + focal + 0.1*ridge` | 1.0 | Does foreground non-peak suppression reduce continuous heatmap bands? |
 | A4 | `+ablation=heatmap_focal_ridge_seg_low` | 1.5 | `0.25*MSE + focal + 0.1*ridge` | 0.5 | Does reducing segmentation loss pressure help heatmap pointness? |
+| A5 | `+ablation=heatmap_peak_focused` | 3.0 | `0.25*MSE + focal + coord + variance + peakness + 0.05*ridge` | 1.0 | Does the formalized local point objective improve node peak quality without sacrificing segmentation? |
 
 For sigma-changing ablations, regenerate or extend the repo-external cache with the same sigma used by the training config:
 
@@ -620,6 +625,8 @@ For `train=aux_supervised`, expected tags instead include:
 - `train/aux_seg_focal_loss`
 - `train/aux_heatmap_mse`
 - `train/aux_paf_l1`
+- `train/aux_heatmap_coord_loss`, `train/aux_heatmap_coord_var_loss`, `train/aux_heatmap_peak_loss`
+- `train/aux_paf_total_loss`, `train/aux_paf_angular`
 - `val/aux_total_loss`
 - `val/seg_total_loss`
 - `val/seg_iou`
@@ -631,6 +638,8 @@ For `train=aux_supervised`, expected tags instead include:
 - `val/target_positive_rate`
 - `val/heatmap_mae`
 - `val/paf_masked_l1`
+- `val/aux_heatmap_coord_loss`, `val/aux_heatmap_coord_var_loss`, `val/aux_heatmap_peak_loss`, `val/aux_paf_angular`
+- `val/heatmap_node_recall`, `val/heatmap_node_precision`, `val/heatmap_duplicate_peak_rate`, `val/heatmap_background_peaks_per_image`
 
 ## EMA and checkpointing
 

@@ -115,6 +115,11 @@ def epoch_train_joint_graph_aux(
                 "aux_detail_total": aux_losses["detail_total"],
                 "aux_heatmap_total": aux_losses["heatmap_total"],
                 "aux_paf_l1": aux_losses["paf_l1"],
+                "aux_heatmap_coord": aux_losses["heatmap_coord"],
+                "aux_heatmap_coord_var": aux_losses["heatmap_coord_var"],
+                "aux_heatmap_peak": aux_losses["heatmap_peak"],
+                "aux_paf_total": aux_losses["paf_total"],
+                "aux_paf_angular": aux_losses["paf_angular"],
             },
             batch_size,
         )

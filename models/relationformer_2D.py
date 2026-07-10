@@ -45,8 +45,13 @@ class AuxMapHead(nn.Module):
         )
 
     def forward(self, feature, output_size):
-        logits = self.layers(feature)
-        return F.interpolate(logits, size=output_size, mode="bilinear", align_corners=False)
+        _feature, logits = self.forward_with_features(feature, output_size)
+        return logits
+
+    def forward_with_features(self, feature, output_size):
+        aux_feature = self.layers[:-1](feature)
+        logits = self.layers[-1](aux_feature)
+        return aux_feature, F.interpolate(logits, size=output_size, mode="bilinear", align_corners=False)
 
 
 class RelationFormer(nn.Module):
@@ -139,12 +144,32 @@ class RelationFormer(nn.Module):
 
         aux_head_config = _get_attr(config.MODEL, "AUX_HEAD", None)
         self.aux_head = None
+        self.aux_graph_conditioning = None
+        self.aux_graph_conditioning_mode = "none"
         if aux_head_config is not None and bool(_get_attr(aux_head_config, "ENABLED", False)):
+            self.aux_graph_conditioning_mode = str(
+                _get_attr(aux_head_config, "GRAPH_CONDITIONING", "none")
+            ).lower().replace("-", "_")
+            if self.aux_graph_conditioning_mode not in {"none", "aux_feature"}:
+                raise ValueError(
+                    "MODEL.AUX_HEAD.GRAPH_CONDITIONING must be one of ['none', 'aux_feature'], "
+                    f"got {self.aux_graph_conditioning_mode!r}"
+                )
+            aux_hidden_dim = int(_get_attr(aux_head_config, "HIDDEN_DIM", max(self.hidden_dim // 4, 32)))
             self.aux_head = AuxMapHead(
                 in_channels=self.hidden_dim,
-                hidden_channels=_get_attr(aux_head_config, "HIDDEN_DIM", max(self.hidden_dim // 4, 32)),
+                hidden_channels=aux_hidden_dim,
                 out_channels=_get_attr(aux_head_config, "OUT_CHANNELS", 4),
             )
+            if self.aux_graph_conditioning_mode == "aux_feature":
+                conditioning_groups = min(32, self.hidden_dim)
+                while self.hidden_dim % conditioning_groups != 0:
+                    conditioning_groups -= 1
+                self.aux_graph_conditioning = nn.Sequential(
+                    nn.Conv2d(aux_hidden_dim, self.hidden_dim, kernel_size=1),
+                    nn.GroupNorm(conditioning_groups, self.hidden_dim),
+                    nn.ReLU(inplace=True),
+                )
         if not self.graph_output_enabled and self.aux_head is None:
             raise ValueError("MODEL.GRAPH_OUTPUT_ENABLED=false requires MODEL.AUX_HEAD.ENABLED=true")
 
@@ -209,7 +234,14 @@ class RelationFormer(nn.Module):
 
         out = {}
         if self.aux_head is not None:
-            out["aux_maps"] = self.aux_head(srcs[0], samples.tensors.shape[-2:])
+            if self.aux_graph_conditioning is None:
+                out["aux_maps"] = self.aux_head(srcs[0], samples.tensors.shape[-2:])
+            else:
+                aux_feature, aux_maps = self.aux_head.forward_with_features(
+                    srcs[0], samples.tensors.shape[-2:]
+                )
+                out["aux_maps"] = aux_maps
+                srcs[0] = srcs[0] + self.aux_graph_conditioning(aux_feature)
         if not self.graph_output_enabled:
             return None, out
 

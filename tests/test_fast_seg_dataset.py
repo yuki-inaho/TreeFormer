@@ -93,6 +93,57 @@ def test_fast_seg_dataset_can_generate_paf_targets_when_enabled(tmp_path: Path):
     assert paf_mask.sum().item() > 0
 
 
+def test_mask_skeleton_direction_target_fills_the_foreground_width():
+    from treeformer_train.aux_map_targets import make_aux_map_target_config, make_aux_map_targets
+
+    segmentation = torch.zeros(32, 64)
+    segmentation[8:24, 8:56] = 1.0
+    config = make_aux_map_target_config(
+        mode="seg_heatmap_paf",
+        direction_target_source="mask_skeleton",
+        direction_encoding="double_angle",
+        direction_tangent_radius=4,
+        direction_junction_exclusion_radius=2,
+    )
+    direction, valid_mask, _heatmap = make_aux_map_targets(
+        torch.empty((0, 2)),
+        torch.empty((0, 2), dtype=torch.long),
+        (32, 64),
+        config,
+        segmentation=segmentation,
+    )
+
+    assert direction.shape == (32, 64, 2)
+    assert valid_mask.sum() > 0
+    assert valid_mask.sum() > 2 * 32
+    assert torch.allclose(direction[16, 32], torch.tensor([1.0, 0.0]), atol=0.1)
+    assert valid_mask[16, 32]
+    assert not valid_mask[0, 0]
+
+
+def test_mask_skeleton_direction_target_excludes_branch_junction():
+    import cv2
+
+    from treeformer_train.aux_map_targets import make_mask_skeleton_direction_targets
+
+    segmentation = torch.zeros(96, 96)
+    mask = segmentation.numpy()
+    cv2.line(mask, (48, 10), (48, 86), 1.0, 13)
+    cv2.line(mask, (18, 48), (78, 48), 1.0, 13)
+
+    direction, valid_mask = make_mask_skeleton_direction_targets(
+        segmentation,
+        tangent_radius=8,
+        junction_exclusion_radius=6,
+    )
+
+    assert direction.shape == (96, 96, 2)
+    assert not valid_mask[48, 48]
+    assert valid_mask[30, 48]
+    assert valid_mask[48, 30]
+    assert not valid_mask[0, 0]
+
+
 def test_fast_seg_dataset_can_resize_from_full_resolution(tmp_path: Path):
     split_root = _write_split(tmp_path, "train", count=1)
     dataset = FastSegSupervisedDataset(split_root, max_size=64, resize_policy="full")
@@ -182,7 +233,7 @@ def test_fast_seg_cache_omits_unused_detail_boundary_payload(tmp_path: Path):
     build_fast_seg_cache(split_root=split_root, cache_dir=cache_dir, max_size=64)
 
     payload = torch.load(next(cache_dir.glob("*.pt")), map_location="cpu", weights_only=False)
-    assert payload["cache_format_version"] == 2
+    assert payload["cache_format_version"] == 3
     assert "detail_boundary" not in payload
 
     none_dataset = FastSegSupervisedDataset(split_root, max_size=64, cache_mode="none")
@@ -220,6 +271,10 @@ def test_build_train_val_datasets_can_select_fast_seg_loader(tmp_path: Path):
         AUX_HEATMAP_CUTOFF=0.01,
         AUX_PAF_LINE_THICKNESS=2,
         AUX_PAF_MASK_THICKNESS=6,
+        AUX_DIRECTION_TARGET_SOURCE="graph_edges",
+        AUX_DIRECTION_ENCODING="vector",
+        AUX_DIRECTION_TANGENT_RADIUS=8,
+        AUX_DIRECTION_JUNCTION_EXCLUSION_RADIUS=6,
         AUX_DETAIL_THRESHOLD=0.1,
         AUX_DETAIL_SCALES=[1, 2, 4],
         AUX_DETAIL_SUPPORT_KERNEL_SIZE=3,

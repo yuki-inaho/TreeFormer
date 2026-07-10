@@ -40,8 +40,26 @@ class AuxLossWeights:
     heatmap_ridge_threshold: float = 0.05
     heatmap_mask_source: str = "none"
     heatmap_mask_outside_weight: float = 1.0
+    heatmap_focal_pos_source: str = "threshold"
+    heatmap_coord: float = 0.0
+    heatmap_coord_window_radius: int = 6
+    heatmap_coord_temperature: float = 1.0
+    heatmap_coord_huber_delta: float = 1.0
+    heatmap_coord_var: float = 0.0
+    heatmap_peak: float = 0.0
+    heatmap_peak_center_radius: int = 1
+    heatmap_peak_annulus_inner: int = 3
+    heatmap_peak_annulus_outer: int = 6
+    heatmap_peak_margin: float = 1.0
+    heatmap_peak_temperature: float = 1.0
+    heatmap_peak_min_target: float = 0.5
+    heatmap_eval_peak_threshold: float = 0.5
+    heatmap_eval_match_radius: float = 6.0
     paf: float = 0.25
+    paf_l1: float = 1.0
+    paf_angular: float = 0.0
     paf_mask_source: str = "paf"
+    direction_encoding: str = "vector"
 
 
 AuxLossCore = Callable[
@@ -119,12 +137,40 @@ def build_aux_loss_weights(train_config: Any) -> AuxLossWeights:
             default="none",
         ),
         heatmap_mask_outside_weight=max(0.0, float(_get(train_config, "AUX_HEATMAP_MASK_OUTSIDE_WEIGHT", 1.0))),
+        heatmap_focal_pos_source=_choice(
+            _get(train_config, "AUX_HEATMAP_FOCAL_POS_SOURCE", None),
+            key="AUX_HEATMAP_FOCAL_POS_SOURCE",
+            allowed={"threshold", "target_peaks"},
+            default="threshold",
+        ),
+        heatmap_coord=float(_get(train_config, "W_AUX_HEATMAP_COORD", 0.0)),
+        heatmap_coord_window_radius=int(_get(train_config, "AUX_HEATMAP_COORD_WINDOW_RADIUS", 6)),
+        heatmap_coord_temperature=float(_get(train_config, "AUX_HEATMAP_COORD_TEMPERATURE", 1.0)),
+        heatmap_coord_huber_delta=float(_get(train_config, "AUX_HEATMAP_COORD_HUBER_DELTA", 1.0)),
+        heatmap_coord_var=float(_get(train_config, "W_AUX_HEATMAP_COORD_VAR", 0.0)),
+        heatmap_peak=float(_get(train_config, "W_AUX_HEATMAP_PEAK", 0.0)),
+        heatmap_peak_center_radius=int(_get(train_config, "AUX_HEATMAP_PEAK_CENTER_RADIUS", 1)),
+        heatmap_peak_annulus_inner=int(_get(train_config, "AUX_HEATMAP_PEAK_ANNULUS_INNER", 3)),
+        heatmap_peak_annulus_outer=int(_get(train_config, "AUX_HEATMAP_PEAK_ANNULUS_OUTER", 6)),
+        heatmap_peak_margin=float(_get(train_config, "AUX_HEATMAP_PEAK_MARGIN", 1.0)),
+        heatmap_peak_temperature=float(_get(train_config, "AUX_HEATMAP_PEAK_TEMPERATURE", 1.0)),
+        heatmap_peak_min_target=float(_get(train_config, "AUX_HEATMAP_PEAK_MIN_TARGET", 0.5)),
+        heatmap_eval_peak_threshold=float(_get(train_config, "AUX_HEATMAP_EVAL_PEAK_THRESHOLD", 0.5)),
+        heatmap_eval_match_radius=float(_get(train_config, "AUX_HEATMAP_EVAL_MATCH_RADIUS", 6.0)),
         paf=float(_get(train_config, "W_AUX_PAF", 0.25)),
+        paf_l1=float(_get(train_config, "W_AUX_PAF_L1", 1.0)),
+        paf_angular=float(_get(train_config, "W_AUX_PAF_ANGULAR", 0.0)),
         paf_mask_source=_choice(
             _get(train_config, "AUX_PAF_MASK_SOURCE", None),
             key="AUX_PAF_MASK_SOURCE",
             allowed={"paf", "paf_and_segmentation"},
             default="paf",
+        ),
+        direction_encoding=_choice(
+            _get(train_config, "AUX_DIRECTION_ENCODING", None),
+            key="AUX_DIRECTION_ENCODING",
+            allowed={"vector", "double_angle"},
+            default="vector",
         ),
     )
 
@@ -223,9 +269,13 @@ def centernet_heatmap_focal_loss_with_logits(
     beta: float = 4.0,
     pos_threshold: float = 0.99,
     weight: torch.Tensor | None = None,
+    positive_mask: torch.Tensor | None = None,
 ) -> torch.Tensor:
     probabilities = torch.sigmoid(logits).clamp(1e-6, 1.0 - 1e-6)
-    positive = (target >= pos_threshold).to(dtype=target.dtype)
+    if positive_mask is not None:
+        positive = positive_mask.bool().to(dtype=target.dtype)
+    else:
+        positive = (target >= pos_threshold).to(dtype=target.dtype)
     negative = 1.0 - positive
     negative_weight = (1.0 - target).clamp_min(0.0).pow(beta)
 
@@ -234,13 +284,11 @@ def centernet_heatmap_focal_loss_with_logits(
     if weight is not None:
         positive_loss = positive_loss * weight
         negative_loss = negative_loss * weight
-        positive_count = (positive * weight).sum()
-        negative_count = (negative * weight).sum()
+        positive_count = (positive * (weight > 0.0).to(dtype=weight.dtype)).sum()
     else:
         positive_count = positive.sum()
-        negative_count = negative.sum()
-    normalizer = torch.where(positive_count > 0.0, positive_count, negative_count.clamp_min(1.0))
-    return (positive_loss.sum() + negative_loss.sum()) / normalizer.clamp_min(1.0)
+    normalizer = positive_count.clamp_min(1.0)
+    return (positive_loss.sum() + negative_loss.sum()) / normalizer
 
 
 def _weighted_mean(values: torch.Tensor, weights: torch.Tensor) -> torch.Tensor:
@@ -269,6 +317,174 @@ def _heatmap_loss_weight(
     return seg_mask + (1.0 - seg_mask) * outside_weight
 
 
+def _extract_target_peak_indices(heatmap_target: torch.Tensor, *, min_target: float) -> torch.Tensor:
+    """Locate GT node peaks directly from the cached heatmap target.
+
+    A peak is any pixel that equals its 3x3 max-pooled neighborhood (a local
+    maximum) and is at least ``min_target``. Peaks are derived from the cached
+    heatmap target's local maxima -- whatever sigma/cutoff produced the cache --
+    so GT node coordinates never need to be re-plumbed through the collate
+    contract; this function only ever looks at the rendered target tensor.
+
+    Args:
+        heatmap_target: ``[B,1,H,W]`` rendered node heatmap target.
+        min_target: minimum target value for a local maximum to count as a peak.
+
+    Returns:
+        ``[K,3]`` long tensor of ``(batch, y, x)`` indices.
+    """
+    if heatmap_target.ndim != 4 or heatmap_target.shape[1] != 1:
+        raise ValueError(f"heatmap_target must have shape [B,1,H,W], got {tuple(heatmap_target.shape)}")
+    pooled = F.max_pool2d(heatmap_target, kernel_size=3, stride=1, padding=1)
+    is_local_max = heatmap_target == pooled
+    is_above_threshold = heatmap_target >= min_target
+    mask = (is_local_max & is_above_threshold).squeeze(1)
+    return mask.nonzero(as_tuple=False).long()
+
+
+def _gather_peak_windows(
+    values: torch.Tensor, peaks: torch.Tensor, *, radius: int, pad_value: float = -1e4
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Gather (2*radius+1)^2 windows of ``values`` centered on each peak.
+
+    ``values`` is ``[B,H,W]``. Returns ``(windows, u_y, u_x)`` where ``windows``
+    is ``[K,S,S]`` (``S = 2*radius+1``) and ``u_y``/``u_x`` are the matching
+    absolute (unpadded) pixel coordinates, also ``[K,S,S]``.
+    """
+    window_size = 2 * radius + 1
+    padded = F.pad(values, (radius, radius, radius, radius), mode="constant", value=pad_value)
+
+    k = peaks.shape[0]
+    batch_idx = peaks[:, 0].long()
+    y_idx = peaks[:, 1].long()
+    x_idx = peaks[:, 2].long()
+
+    offsets = torch.arange(window_size, device=values.device)
+    rows = (y_idx.view(k, 1, 1) + offsets.view(1, window_size, 1)).expand(k, window_size, window_size)
+    cols = (x_idx.view(k, 1, 1) + offsets.view(1, 1, window_size)).expand(k, window_size, window_size)
+    batch_grid = batch_idx.view(k, 1, 1).expand(k, window_size, window_size)
+    windows = padded[batch_grid, rows, cols]
+
+    rel = offsets.float() - radius
+    u_y = (y_idx.view(k, 1, 1).float() + rel.view(1, window_size, 1)).expand(k, window_size, window_size)
+    u_x = (x_idx.view(k, 1, 1).float() + rel.view(1, 1, window_size)).expand(k, window_size, window_size)
+    return windows, u_y, u_x
+
+
+def _local_softargmax_losses(
+    heatmap_logits: torch.Tensor,
+    peaks: torch.Tensor,
+    *,
+    window_radius: int,
+    temperature: float,
+    huber_delta: float,
+    valid_weight: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """DSNT-style local soft-argmax coordinate loss and variance suppression.
+
+    For each GT peak, a soft-argmax is computed over a ``(2*window_radius+1)``
+    window of logits, and the resulting sub-pixel coordinate is compared to the
+    GT peak's integer coordinate via a Huber loss. A variance term additionally
+    penalizes a spread-out (non-peaky) softmax distribution within the window.
+    """
+    logits = heatmap_logits.float().squeeze(1)
+    if peaks.shape[0] == 0:
+        zero = logits.new_zeros(())
+        return zero, zero
+
+    radius = int(window_radius)
+    windows, u_y, u_x = _gather_peak_windows(logits, peaks, radius=radius)
+    if valid_weight is not None:
+        valid_windows, _, _ = _gather_peak_windows(
+            valid_weight.float().squeeze(1), peaks, radius=radius, pad_value=0.0
+        )
+        windows = windows.masked_fill(valid_windows <= 0.0, -1e4)
+    k = peaks.shape[0]
+    window_size = 2 * radius + 1
+
+    pi = F.softmax(windows.reshape(k, -1) / temperature, dim=-1).reshape(k, window_size, window_size)
+
+    mu_y = (pi * u_y).sum(dim=(1, 2))
+    mu_x = (pi * u_x).sum(dim=(1, 2))
+    mu = torch.stack((mu_y, mu_x), dim=-1)
+    q = peaks[:, 1:3].float()
+
+    coord_loss = F.huber_loss(mu, q, delta=huber_delta, reduction="none").sum(dim=-1).mean()
+
+    diff_y = u_y - mu_y.view(k, 1, 1)
+    diff_x = u_x - mu_x.view(k, 1, 1)
+    sq_dist = diff_y.pow(2) + diff_x.pow(2)
+    var_loss = (pi * sq_dist).sum(dim=(1, 2)).mean()
+
+    return coord_loss, var_loss
+
+
+def _peakness_margin_loss(
+    heatmap_logits: torch.Tensor,
+    peaks: torch.Tensor,
+    *,
+    center_radius: int,
+    annulus_inner: int,
+    annulus_outer: int,
+    margin: float,
+    temperature: float,
+    valid_weight: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Log-sum-exp margin loss between a peak's center and its surrounding annulus.
+
+    Penalizes logits that stay high along a ridge running through a node (e.g. a
+    tree trunk edge) instead of forming an isolated peak, by requiring a smooth
+    max over the annulus to sit at least ``margin`` below the smooth max over the
+    center region.
+    """
+    if not (0 <= center_radius < annulus_inner <= annulus_outer):
+        raise ValueError(
+            "invalid heatmap peakness geometry: require 0 <= AUX_HEATMAP_PEAK_CENTER_RADIUS < "
+            "AUX_HEATMAP_PEAK_ANNULUS_INNER <= AUX_HEATMAP_PEAK_ANNULUS_OUTER, got "
+            f"center_radius={center_radius}, annulus_inner={annulus_inner}, annulus_outer={annulus_outer}"
+        )
+    logits = heatmap_logits.float().squeeze(1)
+    if peaks.shape[0] == 0:
+        return logits.new_zeros(())
+
+    radius = int(annulus_outer)
+    windows, _, _ = _gather_peak_windows(logits, peaks, radius=radius)
+    k = peaks.shape[0]
+    window_size = 2 * radius + 1
+
+    offsets = torch.arange(window_size, device=logits.device)
+    rel = offsets.float() - radius
+    dy = rel.view(window_size, 1).expand(window_size, window_size)
+    dx = rel.view(1, window_size).expand(window_size, window_size)
+    chebyshev = torch.maximum(dy.abs(), dx.abs())
+
+    center_mask = (chebyshev <= center_radius).view(1, window_size, window_size).expand(k, window_size, window_size)
+    annulus_mask = ((chebyshev >= annulus_inner) & (chebyshev <= annulus_outer)).view(
+        1, window_size, window_size
+    ).expand(k, window_size, window_size)
+
+    valid_windows = torch.ones_like(windows, dtype=torch.bool)
+    if valid_weight is not None:
+        valid_values, _, _ = _gather_peak_windows(
+            valid_weight.float().squeeze(1), peaks, radius=radius, pad_value=0.0
+        )
+        valid_windows = valid_values > 0.0
+        center_mask = center_mask & valid_windows
+        annulus_mask = annulus_mask & valid_windows
+
+    center_values = windows.masked_fill(~center_mask, float("-inf")).reshape(k, -1)
+    annulus_values = windows.masked_fill(~annulus_mask, float("-inf")).reshape(k, -1)
+
+    center_valid = center_mask.reshape(k, -1).any(dim=1)
+    annulus_valid = annulus_mask.reshape(k, -1).any(dim=1)
+
+    m_center = temperature * torch.logsumexp(center_values / temperature, dim=-1)
+    m_annulus = temperature * torch.logsumexp(annulus_values / temperature, dim=-1)
+    valid = center_valid & annulus_valid
+    loss = F.softplus(m_annulus + margin - m_center)
+    return (loss * valid.to(dtype=loss.dtype)).sum() / valid.sum().clamp_min(1).to(dtype=loss.dtype)
+
+
 def _paf_loss_mask(paf_mask: torch.Tensor, seg_target: torch.Tensor, weights: AuxLossWeights) -> torch.Tensor:
     if weights.paf_mask_source == "paf":
         return paf_mask
@@ -279,6 +495,31 @@ def _paf_loss_mask(paf_mask: torch.Tensor, seg_target: torch.Tensor, weights: Au
     if seg_mask.shape[-2:] != paf_mask.shape[-2:]:
         seg_mask = _resize_like(seg_mask, paf_mask, mode="nearest")
     return paf_mask * seg_mask
+
+
+def _direction_angular_error_degrees(
+    prediction: torch.Tensor,
+    target: torch.Tensor,
+    valid_mask: torch.Tensor,
+    *,
+    encoding: str,
+) -> torch.Tensor:
+    prediction = torch.tanh(prediction)
+    prediction = prediction / torch.linalg.vector_norm(prediction, dim=1, keepdim=True).clamp_min(1e-6)
+    target = target / torch.linalg.vector_norm(target, dim=1, keepdim=True).clamp_min(1e-6)
+    cosine = (prediction * target).sum(dim=1, keepdim=True).clamp(-1.0, 1.0)
+    angle = torch.acos(cosine)
+    if encoding == "double_angle":
+        angle = angle * 0.5
+    return _masked_mean(torch.rad2deg(angle), valid_mask)
+
+
+def _direction_angular_loss(prediction: torch.Tensor, target: torch.Tensor, valid_mask: torch.Tensor) -> torch.Tensor:
+    prediction = torch.tanh(prediction)
+    prediction = prediction / torch.linalg.vector_norm(prediction, dim=1, keepdim=True).clamp_min(1e-6)
+    target = target / torch.linalg.vector_norm(target, dim=1, keepdim=True).clamp_min(1e-6)
+    cosine = (prediction * target).sum(dim=1, keepdim=True).clamp(-1.0, 1.0)
+    return _masked_mean(1.0 - cosine, valid_mask)
 
 
 def _compute_aux_loss_terms(
@@ -327,6 +568,25 @@ def _compute_aux_loss_terms(
     heatmap_error = (torch.sigmoid(heatmap_logits) - heatmap_target).pow(2)
     heatmap_weight = _heatmap_loss_weight(seg_target, heatmap_target, weights)
     heatmap_mse = heatmap_error.mean() if heatmap_weight is None else _weighted_mean(heatmap_error, heatmap_weight)
+
+    needs_peaks = (
+        weights.heatmap_coord > 0.0
+        or weights.heatmap_coord_var > 0.0
+        or weights.heatmap_peak > 0.0
+        or (weights.heatmap_focal > 0.0 and weights.heatmap_focal_pos_source == "target_peaks")
+    )
+    peaks = _extract_target_peak_indices(heatmap_target, min_target=weights.heatmap_peak_min_target) if needs_peaks else None
+    if peaks is not None:
+        if heatmap_weight is not None and peaks.shape[0] > 0:
+            peak_valid = heatmap_weight[peaks[:, 0], 0, peaks[:, 1], peaks[:, 2]] > 0.0
+            peaks = peaks[peak_valid]
+
+    positive_mask = None
+    if weights.heatmap_focal > 0.0 and weights.heatmap_focal_pos_source == "target_peaks":
+        positive_mask = torch.zeros_like(heatmap_target, dtype=torch.bool)
+        if peaks.shape[0] > 0:
+            positive_mask[peaks[:, 0], 0, peaks[:, 1], peaks[:, 2]] = True
+
     heatmap_focal = centernet_heatmap_focal_loss_with_logits(
         heatmap_logits,
         heatmap_target,
@@ -334,26 +594,60 @@ def _compute_aux_loss_terms(
         beta=weights.heatmap_focal_beta,
         pos_threshold=weights.heatmap_focal_pos_threshold,
         weight=heatmap_weight,
+        positive_mask=positive_mask,
     )
     heatmap_probabilities = torch.sigmoid(heatmap_logits)
     ridge_mask = (heatmap_target < weights.heatmap_ridge_threshold).to(dtype=heatmap_target.dtype)
     ridge_weight = ridge_mask if heatmap_weight is None else ridge_mask * heatmap_weight
     heatmap_ridge = _weighted_mean(heatmap_probabilities.pow(2), ridge_weight)
+
+    if weights.heatmap_coord > 0.0 or weights.heatmap_coord_var > 0.0:
+        heatmap_coord, heatmap_coord_var = _local_softargmax_losses(
+            heatmap_logits,
+            peaks,
+            window_radius=weights.heatmap_coord_window_radius,
+            temperature=weights.heatmap_coord_temperature,
+            huber_delta=weights.heatmap_coord_huber_delta,
+            valid_weight=heatmap_weight,
+        )
+    else:
+        heatmap_coord = zero
+        heatmap_coord_var = zero
+
+    if weights.heatmap_peak > 0.0:
+        heatmap_peak = _peakness_margin_loss(
+            heatmap_logits,
+            peaks,
+            center_radius=weights.heatmap_peak_center_radius,
+            annulus_inner=weights.heatmap_peak_annulus_inner,
+            annulus_outer=weights.heatmap_peak_annulus_outer,
+            margin=weights.heatmap_peak_margin,
+            temperature=weights.heatmap_peak_temperature,
+            valid_weight=heatmap_weight,
+        )
+    else:
+        heatmap_peak = zero
+
     heatmap_total = (
         weights.heatmap_mse * heatmap_mse
         + weights.heatmap_focal * heatmap_focal
         + weights.heatmap_ridge * heatmap_ridge
+        + weights.heatmap_coord * heatmap_coord
+        + weights.heatmap_coord_var * heatmap_coord_var
+        + weights.heatmap_peak * heatmap_peak
     )
 
     active_paf_mask = _paf_loss_mask(paf_mask, seg_target, weights)
     paf_l1 = (torch.abs(torch.tanh(paf_pred) - paf_target) * active_paf_mask).sum()
     paf_l1 = paf_l1 / (active_paf_mask.sum().clamp_min(1.0) * paf_target.shape[1])
+    paf_angular = _direction_angular_loss(paf_pred, paf_target, active_paf_mask)
+    paf_total = weights.paf_l1 * paf_l1 + weights.paf_angular * paf_angular
 
     total = (
         weights.segmentation * seg_total
         + weights.detail * detail_total
         + weights.heatmap * heatmap_total
-        + weights.paf * paf_l1
+        + weights.paf * paf_total
     )
     # Deliberately scalar-only: _MetricAverager.update() calls
     # float(value.detach().item()) on every value in this dict (directly, or via
@@ -374,7 +668,12 @@ def _compute_aux_loss_terms(
         "heatmap_mse": heatmap_mse,
         "heatmap_focal": heatmap_focal,
         "heatmap_ridge": heatmap_ridge,
+        "heatmap_coord": heatmap_coord,
+        "heatmap_coord_var": heatmap_coord_var,
+        "heatmap_peak": heatmap_peak,
+        "paf_total": paf_total,
         "paf_l1": paf_l1,
+        "paf_angular": paf_angular,
     }
 
 
@@ -463,6 +762,85 @@ def compute_aux_losses(
     return _compute_aux_loss_terms(aux_maps, seg_target, heatmap_target, paf_target, paf_mask, weights, detail_target)
 
 
+def _heatmap_peak_detection_metrics(
+    heatmap_logits: torch.Tensor,
+    heatmap_target: torch.Tensor,
+    weights: AuxLossWeights,
+    valid_weight: torch.Tensor | None = None,
+) -> dict[str, torch.Tensor]:
+    """Peak-detection quality metrics: predicted local maxima vs. GT peaks.
+
+    GT peaks come from ``_extract_target_peak_indices`` on the heatmap target;
+    predicted peaks are local maxima (3x3 max-pool equality) of
+    ``sigmoid(heatmap_logits)`` at or above ``weights.heatmap_eval_peak_threshold``.
+    Peaks are matched per batch item within Euclidean radius
+    ``weights.heatmap_eval_match_radius``, then averaged (mean) over the batch.
+
+    Edge conventions per image (Ng = #GT peaks, Np = #pred peaks):
+      - Ng == 0 and Np == 0: recall=1, precision=1, duplicate=0, background=0.
+      - Ng == 0 and Np >  0: recall=1, precision=0, duplicate=0, background=Np.
+      - Ng >  0 and Np == 0: recall=0, precision=1, duplicate=0, background=0.
+      - otherwise: recall = fraction of GT peaks matched by >=1 pred peak;
+        precision = fraction of pred peaks matched to >=1 GT peak; duplicate =
+        mean over GT of max(0, #pred within radius - 1); background = #pred
+        farther than radius from every GT peak.
+    """
+    gt_peaks = _extract_target_peak_indices(heatmap_target, min_target=weights.heatmap_peak_min_target)
+    if valid_weight is not None and gt_peaks.shape[0] > 0:
+        gt_valid = valid_weight[gt_peaks[:, 0], 0, gt_peaks[:, 1], gt_peaks[:, 2]] > 0.0
+        gt_peaks = gt_peaks[gt_valid]
+    probabilities = torch.sigmoid(heatmap_logits)
+    pooled = F.max_pool2d(probabilities, kernel_size=3, stride=1, padding=1)
+    pred_mask = (probabilities == pooled) & (probabilities >= weights.heatmap_eval_peak_threshold)
+    if valid_weight is not None:
+        pred_mask = pred_mask & (valid_weight > 0.0)
+    pred_peaks = pred_mask.squeeze(1).nonzero(as_tuple=False)
+
+    radius = float(weights.heatmap_eval_match_radius)
+    recalls: list[float] = []
+    precisions: list[float] = []
+    duplicates: list[float] = []
+    backgrounds: list[float] = []
+    for batch_index in range(heatmap_target.shape[0]):
+        gt_b = gt_peaks[gt_peaks[:, 0] == batch_index][:, 1:3].float()
+        pred_b = pred_peaks[pred_peaks[:, 0] == batch_index][:, 1:3].float()
+        n_gt = gt_b.shape[0]
+        n_pred = pred_b.shape[0]
+        if n_gt == 0 and n_pred == 0:
+            recalls.append(1.0)
+            precisions.append(1.0)
+            duplicates.append(0.0)
+            backgrounds.append(0.0)
+        elif n_gt == 0:
+            recalls.append(1.0)
+            precisions.append(0.0)
+            duplicates.append(0.0)
+            backgrounds.append(float(n_pred))
+        elif n_pred == 0:
+            recalls.append(0.0)
+            precisions.append(1.0)
+            duplicates.append(0.0)
+            backgrounds.append(0.0)
+        else:
+            within_radius = torch.cdist(gt_b, pred_b) <= radius
+            matches_per_gt = within_radius.sum(dim=1)
+            matches_per_pred = within_radius.sum(dim=0)
+            recalls.append(float((matches_per_gt > 0).float().mean().item()))
+            precisions.append(float((matches_per_pred > 0).float().mean().item()))
+            duplicates.append(float((matches_per_gt - 1).clamp_min(0).float().mean().item()))
+            backgrounds.append(float((matches_per_pred == 0).sum().item()))
+
+    def _avg(values: list[float]) -> torch.Tensor:
+        return heatmap_logits.new_tensor(sum(values) / max(len(values), 1))
+
+    return {
+        "heatmap_node_recall": _avg(recalls),
+        "heatmap_node_precision": _avg(precisions),
+        "heatmap_duplicate_peak_rate": _avg(duplicates),
+        "heatmap_background_peaks_per_image": _avg(backgrounds),
+    }
+
+
 def compute_aux_eval_metrics(
     output: dict[str, torch.Tensor],
     targets: dict[str, torch.Tensor],
@@ -516,17 +894,30 @@ def compute_aux_eval_metrics(
     masked_heatmap_mae = heatmap_mae if heatmap_weight is None else _weighted_mean(heatmap_abs_error, heatmap_weight)
     heatmap_probabilities = torch.sigmoid(heatmap_logits)
     heatmap_peak_mask = heatmap_target >= weights.heatmap_focal_pos_threshold
+    heatmap_peak_weight = heatmap_peak_mask.to(dtype=heatmap_probabilities.dtype)
+    if heatmap_weight is not None:
+        heatmap_peak_weight = heatmap_peak_weight * heatmap_weight
     heatmap_nonpeak_foreground_mask = torch.logical_and(
         seg_target > 0.5,
         heatmap_target < weights.heatmap_ridge_threshold,
     )
-    heatmap_peak_mean = _masked_mean(heatmap_probabilities, heatmap_peak_mask)
+    heatmap_peak_mean = _weighted_mean(heatmap_probabilities, heatmap_peak_weight)
     heatmap_nonpeak_foreground_mean = _masked_mean(heatmap_probabilities, heatmap_nonpeak_foreground_mask)
     heatmap_peak_contrast = heatmap_peak_mean - heatmap_nonpeak_foreground_mean
+
+    heatmap_peak_detection = _heatmap_peak_detection_metrics(
+        heatmap_logits, heatmap_target, weights, valid_weight=heatmap_weight
+    )
 
     active_paf_mask = _paf_loss_mask(paf_mask, seg_target, weights)
     paf_masked_l1 = (torch.abs(torch.tanh(paf_pred) - paf_target) * active_paf_mask).sum()
     paf_masked_l1 = paf_masked_l1 / (active_paf_mask.sum().clamp_min(1.0) * paf_target.shape[1])
+    direction_angular_error_deg = _direction_angular_error_degrees(
+        paf_pred,
+        paf_target,
+        active_paf_mask,
+        encoding=weights.direction_encoding,
+    )
     if aux_maps.shape[1] >= 5:
         # detail_target was computed once above (or supplied by the caller) and
         # passed into compute_aux_losses; reuse that same local variable here
@@ -576,7 +967,9 @@ def compute_aux_eval_metrics(
         "heatmap_peak_mean": heatmap_peak_mean,
         "heatmap_nonpeak_foreground_mean": heatmap_nonpeak_foreground_mean,
         "heatmap_peak_contrast": heatmap_peak_contrast,
+        **heatmap_peak_detection,
         "paf_masked_l1": paf_masked_l1,
+        "direction_angular_error_deg": direction_angular_error_deg,
     }
 
 

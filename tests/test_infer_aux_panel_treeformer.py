@@ -45,6 +45,17 @@ def test_aux_visualization_helpers_return_rgb_images():
     assert paf_to_rgb(paf).mode == "RGB"
 
 
+def test_heatmap_visualization_is_black_outside_visible_mask():
+    values = torch.ones(8, 10)
+    visible = torch.zeros(8, 10)
+    visible[2:6, 3:7] = 1.0
+
+    image = np.asarray(heatmap_to_pil(values, visible_mask=visible))
+
+    assert np.all(image[0, 0] == 0)
+    assert np.any(image[3, 4] != 0)
+
+
 def test_aux_visualization_helpers_mask_maps_by_segmentation_confidence():
     heatmap = torch.ones(8, 10)
     paf = torch.ones(2, 8, 10)

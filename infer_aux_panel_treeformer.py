@@ -110,7 +110,11 @@ def grayscale_to_pil(values: torch.Tensor | np.ndarray, *, normalize: bool = Fal
     return Image.fromarray((array * 255.0).astype(np.uint8), mode="L").convert("RGB")
 
 
-def heatmap_to_pil(values: torch.Tensor | np.ndarray) -> Image.Image:
+def heatmap_to_pil(
+    values: torch.Tensor | np.ndarray,
+    *,
+    visible_mask: torch.Tensor | np.ndarray | None = None,
+) -> Image.Image:
     """Small dependency-free blue-green-yellow-red heatmap."""
 
     array = np.clip(normalize01(values), 0.0, 1.0)
@@ -118,6 +122,8 @@ def heatmap_to_pil(values: torch.Tensor | np.ndarray) -> Image.Image:
     green = np.clip(1.5 - np.abs(array - 0.55) * 2.2, 0.0, 1.0)
     blue = np.clip(1.2 - 2.0 * array, 0.0, 1.0)
     rgb = np.stack([red, green, blue], axis=-1)
+    if visible_mask is not None:
+        rgb[~_as_visible_mask(visible_mask, shape=array.shape)] = 0.0
     return Image.fromarray((rgb * 255.0).astype(np.uint8), mode="RGB")
 
 
@@ -134,8 +140,13 @@ def overlay_map(
     return Image.fromarray(np.clip(mixed, 0.0, 255.0).astype(np.uint8), mode="RGB")
 
 
-def paf_to_rgb(paf: torch.Tensor | np.ndarray) -> Image.Image:
-    """Visualize a two-channel vector field as direction color and magnitude value."""
+def paf_to_rgb(
+    paf: torch.Tensor | np.ndarray,
+    *,
+    encoding: str = "vector",
+    visible_mask: torch.Tensor | np.ndarray | None = None,
+) -> Image.Image:
+    """Visualize a two-channel direction field as hue and magnitude value."""
 
     array = paf.detach().cpu().float().numpy() if isinstance(paf, torch.Tensor) else np.asarray(paf, dtype=np.float32)
     if array.ndim == 3 and array.shape[0] == 2:
@@ -148,12 +159,28 @@ def paf_to_rgb(paf: torch.Tensor | np.ndarray) -> Image.Image:
         raise ValueError(f"PAF must be shaped [2,H,W] or [H,W,2], got {array.shape}")
 
     magnitude = np.clip(np.sqrt(x * x + y * y), 0.0, 1.0)
-    angle = (np.arctan2(y, x) + np.pi) / (2.0 * np.pi)
+    encoding = str(encoding).lower().replace("-", "_")
+    if encoding == "double_angle":
+        angle = (0.5 * np.arctan2(y, x) + np.pi / 2.0) / np.pi
+    elif encoding == "vector":
+        angle = (np.arctan2(y, x) + np.pi) / (2.0 * np.pi)
+    else:
+        raise ValueError(f"unsupported direction encoding: {encoding!r}")
     red = np.clip(np.abs(angle * 6.0 - 3.0) - 1.0, 0.0, 1.0)
     green = np.clip(2.0 - np.abs(angle * 6.0 - 2.0), 0.0, 1.0)
     blue = np.clip(2.0 - np.abs(angle * 6.0 - 4.0), 0.0, 1.0)
     rgb = np.stack([red, green, blue], axis=-1) * magnitude[..., None]
+    if visible_mask is not None:
+        rgb[~_as_visible_mask(visible_mask, shape=magnitude.shape)] = 0.0
     return Image.fromarray((rgb * 255.0).astype(np.uint8), mode="RGB")
+
+
+def _as_visible_mask(mask: torch.Tensor | np.ndarray, *, shape: tuple[int, int]) -> np.ndarray:
+    array = mask.detach().cpu().float().numpy() if isinstance(mask, torch.Tensor) else np.asarray(mask, dtype=np.float32)
+    array = np.squeeze(array)
+    if array.shape != shape:
+        raise ValueError(f"visible mask shape {array.shape} does not match map shape {shape}")
+    return array > 0.5
 
 
 def _segmentation_confidence_mask(
@@ -290,6 +317,12 @@ def build_aux_panel_dataset(
                 heatmap_cutoff=float(checkpoint_data_value(checkpoint, "AUX_HEATMAP_CUTOFF", 0.01)),
                 paf_line_thickness=int(checkpoint_data_value(checkpoint, "AUX_PAF_LINE_THICKNESS", 2)),
                 paf_mask_thickness=int(checkpoint_data_value(checkpoint, "AUX_PAF_MASK_THICKNESS", 6)),
+                direction_target_source=str(checkpoint_data_value(checkpoint, "AUX_DIRECTION_TARGET_SOURCE", "graph_edges")),
+                direction_encoding=str(checkpoint_data_value(checkpoint, "AUX_DIRECTION_ENCODING", "vector")),
+                direction_tangent_radius=int(checkpoint_data_value(checkpoint, "AUX_DIRECTION_TANGENT_RADIUS", 8)),
+                direction_junction_exclusion_radius=int(
+                    checkpoint_data_value(checkpoint, "AUX_DIRECTION_JUNCTION_EXCLUSION_RADIUS", 6)
+                ),
                 return_forest_metadata=True,
             ),
             "fast-seg",
@@ -391,6 +424,7 @@ def make_aux_panel(
     show_derived_detail: bool = False,
     show_heatmap: bool = True,
     show_paf: bool = True,
+    direction_encoding: str = "vector",
 ) -> Image.Image:
     input_image = image_tensor_to_pil(image)
     gt_segmentation = gt_segmentation.float().clamp(0.0, 1.0)
@@ -432,8 +466,8 @@ def make_aux_panel(
     if show_heatmap:
         panels.extend(
             [
-                add_label(heatmap_to_pil(gt_heatmap_display), "GT node heatmap"),
-                add_label(heatmap_to_pil(pred_heatmap_display), "Pred node heatmap"),
+                add_label(heatmap_to_pil(gt_heatmap_display, visible_mask=gt_segmentation), "GT node heatmap"),
+                add_label(heatmap_to_pil(pred_heatmap_display, visible_mask=pred_segmentation), "Pred node heatmap"),
             ]
         )
     if show_paf:
@@ -443,8 +477,14 @@ def make_aux_panel(
             [
                 add_label(grayscale_to_pil(gt_paf_magnitude), "GT PAF magnitude"),
                 add_label(grayscale_to_pil(pred_paf_magnitude), "Pred PAF magnitude"),
-                add_label(paf_to_rgb(gt_paf_display), "GT PAF direction"),
-                add_label(paf_to_rgb(pred_paf_display), "Pred PAF direction"),
+                add_label(
+                    paf_to_rgb(gt_paf_display, encoding=direction_encoding, visible_mask=gt_segmentation),
+                    "GT direction",
+                ),
+                add_label(
+                    paf_to_rgb(pred_paf_display, encoding=direction_encoding, visible_mask=pred_segmentation),
+                    "Pred direction",
+                ),
             ]
         )
     return make_panel_grid(panels, columns=columns, pad=pad, panel_width=panel_width)
@@ -552,6 +592,7 @@ def main() -> None:
         raise RuntimeError("CUDA was requested but is unavailable")
 
     checkpoint_metadata = load_checkpoint_mapping(Path(args.checkpoint))
+    direction_encoding = str(checkpoint_data_value(checkpoint_metadata, "AUX_DIRECTION_ENCODING", "vector"))
     show_heatmap = (
         bool(args.show_untrained_maps) or checkpoint_train_weight(checkpoint_metadata, "W_AUX_HEATMAP", 1.0) > 0.0
     )
@@ -592,6 +633,7 @@ def main() -> None:
             show_derived_detail=bool(args.show_derived_detail),
             show_heatmap=show_heatmap,
             show_paf=show_paf,
+            direction_encoding=direction_encoding,
         )
         panel_path = output_dir / f"{sample_name}_aux_panel.png"
         panel.save(panel_path)
