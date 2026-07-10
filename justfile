@@ -1,6 +1,6 @@
 set dotenv-load := false
 
-python := env_var_or_default("TREEFORMER_PYTHON", "../venv/TreeFormer/bin/python")
+python := env_var_or_default("TREEFORMER_PYTHON", ".venv/bin/python")
 assets_root := env_var_or_default("TREEFORMER_ASSETS_ROOT", "../TreeFormer_assets")
 private_treeformer_data := env_var_or_default("TREEFORMER_PRIVATE_DATA", "")
 fork_grapevine_pretrained := env_var_or_default("TREEFORMER_PRETRAINED_CHECKPOINT", assets_root + "/pretrained_weights/fork_source_main/grapevein/checkpoint_ours.pkl")
@@ -19,6 +19,20 @@ private_optuna_joint_vr_aux_output := env_var_or_default("TREEFORMER_OPTUNA_OUTP
 seg_cache_root := env_var_or_default("TREEFORMER_SEG_CACHE_ROOT", assets_root + "/cache/fast_seg/private_seg_max128")
 aux_panel_output := env_var_or_default("TREEFORMER_AUX_PANEL_OUTPUT", assets_root + "/aux_inference_panels")
 ablation_name := env_var_or_default("TREEFORMER_ABLATION", "heatmap_mse_baseline")
+
+setup-venv:
+    # Order matters here and must not be reversed: uv sync runs BEFORE the CUDA ops
+    # build, and always with --inexact. If a bare `uv sync --all-groups` runs after
+    # the build, it deletes the already-built MultiScaleDeformableAttention .so
+    # (verified: it reports "Would uninstall 1 package -
+    # multiscaledeformableattention==1.0" because the build's `setup.py install`
+    # registers an .egg-info that uv treats as a removable distribution). Running
+    # sync first means there is nothing built yet to delete, so this order is a
+    # structural defense against forgetting --inexact later, not just a convention.
+    uv venv --python 3.10
+    uv sync --inexact --all-groups
+    (cd models/ops && PATH=/usr/local/cuda/bin:$PATH ../../.venv/bin/python setup.py build install)
+    PYTHONPATH=. .venv/bin/python -c "import torch, MultiScaleDeformableAttention; from models.ops.modules import MSDeformAttn; assert torch.cuda.is_available(), 'GPU inference is required but CUDA is unavailable'; print('MSDA OK', torch.__version__, torch.cuda.get_device_name(0))"
 
 hydra-cfg:
     PYTHONPATH=. {{python}} train_hydra.py --cfg job

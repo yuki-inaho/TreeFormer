@@ -5,7 +5,7 @@ This repository now includes a Hydra-managed training entrypoint for TreeFormer 
 ## Main entrypoint
 
 ```bash
-export TREEFORMER_PYTHON=${TREEFORMER_PYTHON:-../venv/TreeFormer/bin/python}
+export TREEFORMER_PYTHON=${TREEFORMER_PYTHON:-.venv/bin/python}
 export TREEFORMER_ASSETS_ROOT=${TREEFORMER_ASSETS_ROOT:-../TreeFormer_assets}
 
 PYTHONPATH=. "$TREEFORMER_PYTHON" train_hydra.py --cfg job

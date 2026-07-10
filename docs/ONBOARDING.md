@@ -192,16 +192,22 @@ split root の基本構造:
 - **主要リポジトリ/ディレクトリ:**
   - repo: current checkout root
   - assets: `${TREEFORMER_ASSETS_ROOT:-../TreeFormer_assets}`
-  - uv venv / Python: `${TREEFORMER_PYTHON:-../venv/TreeFormer/bin/python}`
+  - uv venv / Python: `${TREEFORMER_PYTHON:-.venv/bin/python}`
   - raw Guyot extracted dataset: `${TREEFORMER_GUYOT_DATA}` or `${TREEFORMER_ASSETS_ROOT}/datasets/3D2cut_Single_Guyot_extracted`
   - pretrained weights: `${TREEFORMER_ASSETS_ROOT}/pretrained_weights/fork_source_main`
   - smoke outputs: `${TREEFORMER_ASSETS_ROOT}/trained_weights_smoke`
 
-- **実行環境の注意（venv が 2 つある）:**
-  - 学習・推論・CUDA ops が動くのは repo 外の `${TREEFORMER_PYTHON:-../venv/TreeFormer/bin/python}` (Python 3.10) だけ。`MultiScaleDeformableAttention` の `.so` はこの venv の `site-packages` に直接置かれており、`uv.lock` にも `pip` metadata にも現れない。
-  - repo 内 `.venv` (Python 3.11) は `uv` が作った器で、CUDA ops をビルドしていない。素の `uv sync` はこちらを対象にするため、実行環境は更新されない。`.venv` で `train_hydra.py` を動かすと deformable attention の import で落ちる。
-  - optional group を実行環境へ入れるときは Python を明示する: `uv pip install --python "$TREEFORMER_PYTHON" --project . --group tuning`。`uv sync` は既定で lock にないパッケージを削除するので、実行環境に対して使うなら `--inexact` を付ける。
-  - `.so` は ABI タグ `cp310` に固定されている。Python を変える venv 移行を行う場合は `models/ops` の再ビルドと `MultiScaleDeformableAttention` の import / forward check が必須。
+- **実行環境（venv 一本化後の正本）:**
+  - 正本は repo 内 `.venv` (Python 3.10)。`just setup-venv` で `uv venv --python 3.10` → `uv sync --inexact --all-groups` → `models/ops` の CUDA ops ビルド → `MultiScaleDeformableAttention` の import / forward check、まで一括で行う。
+  - repo 外 `../venv/TreeFormer` (Python 3.10) は**移行前の旧環境**として残置している（削除しない。venv 一本化のロールバック経路）。新規セットアップでは使わない。
+  - `justfile:3` の `python` 変数は `env_var_or_default("TREEFORMER_PYTHON", ".venv/bin/python")`。`TREEFORMER_PYTHON` を明示的に unset すれば `just test` / `just lint` 等すべての recipe が repo 内 `.venv` を使う。
+
+- **venv 一本化で実測した罠 5 件（このセッションで実測。書き残さないと再発する）:**
+  1. **素の `uv sync` は `MultiScaleDeformableAttention` を削除する。** 必ず `--inexact` を付ける。`uv sync --dry-run --all-groups` は `Would uninstall 1 package - multiscaledeformableattention==1.0` を宣言する（`setup.py install` が `.egg-info` を生成し、uv が「削除可能な distribution」と認識するため）。
+  2. **`uv sync` と `uv run` は既定が逆。** `uv sync` の既定は exact（lock にないものを削除する）、`uv run` の既定は inexact（削除しない）。したがって `uv run pytest` は安全だが、**`uv run --exact` を使うと `.so` が消える。**
+  3. **`.so` は ABI タグ `cp310` に加え GPU arch `sm_86` にも固定される。** `TORCH_CUDA_ARCH_LIST` 未設定時、torch の `cpp_extension` はビルド時に可視な GPU の compute capability だけを焼く（本環境の RTX A4500 は cc 8.6）。Python バージョンまたは GPU 世代が変わる環境へ移す場合は `models/ops` の再ビルドが必須。
+  4. **`import MultiScaleDeformableAttention` を単独で書かない。** `.so` は `libc10.so`（torch の共有ライブラリ）に動的リンクしており、`import torch` を先に実行しないと**健全な環境でも** `ImportError: libc10.so: cannot open shared object file` になる。検証は必ず `import torch, MultiScaleDeformableAttention` の順で行う。
+  5. **`uv run pytest` には `PYTHONPATH=.` が要る。** `pyproject.toml` は `[tool.uv] package = false` で project 自体が install されないため、素の `uv run pytest` は失敗する。画面に出るのは `Interrupted: 16 errors during collection` / `16 errors in ...` で、その内訳が `ModuleNotFoundError: No module named 'treeformer_train'` である。`PYTHONPATH=. uv run pytest tests/ -q` なら `99 passed`。`just test` recipe は `PYTHONPATH=.` を明示しているので通る。**この違いを venv 一本化の失敗と誤解しないこと。**
 
 - **`just` の PATH:**
   - 本書と `docs/HYDRA_TRAINING.md` の手順はほぼすべて `just` 前提だが、`just` は `~/.cargo/bin/just` にあり、非ログインシェルでは PATH に載らないことがある。最初に `command -v just` で確認し、無ければ `export PATH="$HOME/.cargo/bin:$PATH"` を通す。
@@ -209,7 +215,7 @@ split root の基本構造:
 - **代表的なコマンド:**
 
 ```bash
-export TREEFORMER_PYTHON=${TREEFORMER_PYTHON:-../venv/TreeFormer/bin/python}
+export TREEFORMER_PYTHON=${TREEFORMER_PYTHON:-.venv/bin/python}
 export TREEFORMER_ASSETS_ROOT=${TREEFORMER_ASSETS_ROOT:-../TreeFormer_assets}
 
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. "$TREEFORMER_PYTHON" -m pytest -p no:cacheprovider tests/test_guyot_dataset.py -q
