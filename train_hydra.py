@@ -145,6 +145,18 @@ def _should_run_validation(*, epoch: int, max_epochs: int, interval: int) -> boo
     return epoch == max_epochs or epoch % interval == 0
 
 
+def _apply_checkpoint_best_metric(metrics: dict[str, float], checkpoint_result: Any | None) -> dict[str, float]:
+    """Refresh `checkpoint/best_metric` with the value the manager just committed.
+
+    The metrics dict is assembled before `CheckpointManager.save()` runs, so it still
+    carries the previous best. Logging it unchanged makes the scalar trail the real best
+    by one validation, and omits it entirely at the first validation.
+    """
+    if checkpoint_result is not None and checkpoint_result.best_metric is not None:
+        metrics["checkpoint/best_metric"] = float(checkpoint_result.best_metric)
+    return metrics
+
+
 def _train_only_metrics(
     *,
     mode: str,
@@ -180,6 +192,7 @@ def _train_only_metrics(
         if mode == "joint":
             metrics.update(
                 {
+                    "train/joint_total_loss": train_metrics["joint_total"],
                     "train/total_loss": train_metrics["graph_total"],
                     "train/class_loss": train_metrics["graph_class"],
                     "train/nodes_loss": train_metrics["graph_nodes"],
@@ -705,7 +718,6 @@ def main(cfg: DictConfig) -> None:
             )
 
         if distributed_context.is_rank_zero:
-            writer.add_scalars(epoch, metrics)
             checkpoint_result = None
             if should_validate and bool(cfg.checkpoint.enabled):
                 checkpoint_result = checkpoint_manager.save(
@@ -718,6 +730,7 @@ def main(cfg: DictConfig) -> None:
                     config=as_plain_container(cfg),
                     extra={"parameter_report": str(output_dir / str(cfg.runtime.parameter_report_name))},
                 )
+            writer.add_scalars(epoch, _apply_checkpoint_best_metric(metrics, checkpoint_result))
             best_summary = (
                 f" | best={checkpoint_result.best_metric} at epoch {checkpoint_result.best_epoch}"
                 if checkpoint_result is not None

@@ -4,7 +4,13 @@ from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
 
 from treeformer_train.config import make_legacy_config
-from train_hydra import _should_run_validation, _train_only_metrics, _validation_interval
+from train_hydra import (
+    _apply_checkpoint_best_metric,
+    _joint_metrics_dict,
+    _should_run_validation,
+    _train_only_metrics,
+    _validation_interval,
+)
 
 
 CONF_DIR = Path(__file__).resolve().parents[1] / "conf"
@@ -69,6 +75,83 @@ def test_joint_skipped_epoch_metrics_keep_graph_and_aux_training_values():
     assert metrics["validation/ran"] == 0.0
     assert metrics["train/total_loss"] == 2.0
     assert metrics["train/aux_total_loss"] == 8.0
+    # The optimised objective must stay plottable on skipped epochs, otherwise a
+    # VAL_INTERVAL>1 run leaves train/joint_total_loss with one point per validation.
+    assert metrics["train/joint_total_loss"] == 1.0
+
+
+def test_joint_skipped_epoch_metrics_expose_the_same_train_tags_as_validation_epochs():
+    train_metrics = {
+        "joint_total": 1.0,
+        "graph_total": 2.0,
+        "graph_class": 3.0,
+        "graph_nodes": 4.0,
+        "graph_edges": 5.0,
+        "graph_boxes": 6.0,
+        "graph_cards": 7.0,
+        "aux_total": 8.0,
+        "aux_seg_total": 9.0,
+        "aux_detail_total": 10.0,
+        "aux_heatmap_total": 11.0,
+        "aux_paf_l1": 12.0,
+    }
+    skipped = _train_only_metrics(mode="joint", train_metrics=train_metrics, lr=1e-4, epoch_seconds=2.5)
+    validated = _joint_metrics_dict(
+        train_metrics=train_metrics,
+        val_smd=0.1,
+        val_aux_metrics={
+            "total": 1.0,
+            "seg_total": 1.0,
+            "seg_iou": 0.5,
+            "seg_dice_score": 0.5,
+            "seg_soft_dice_score": 0.5,
+            "detail_iou": 0.5,
+            "detail_dice_score": 0.5,
+            "heatmap_mae": 0.1,
+            "masked_heatmap_mae": 0.1,
+            "heatmap_peak_mean": 0.2,
+            "heatmap_nonpeak_foreground_mean": 0.1,
+            "heatmap_peak_contrast": 0.1,
+            "paf_masked_l1": 0.3,
+        },
+        lr=1e-4,
+        epoch_seconds=2.5,
+        best_metric=None,
+    )
+
+    train_tags = {tag for tag in validated if tag.startswith("train/")}
+    missing = train_tags - set(skipped)
+
+    assert missing == set(), f"skipped epochs drop train tags: {sorted(missing)}"
+
+
+class _FakeCheckpointResult:
+    def __init__(self, best_metric, best_epoch):
+        self.best_metric = best_metric
+        self.best_epoch = best_epoch
+
+
+def test_logged_best_metric_reflects_the_checkpoint_just_written():
+    """metrics is built before checkpoint_manager.save() commits the new best.
+
+    Logging it unchanged makes `checkpoint/best_metric` trail the real best by one
+    validation, and omits it entirely at the first validation.
+    """
+    first_validation = _apply_checkpoint_best_metric({}, _FakeCheckpointResult(0.0364, 10))
+    assert first_validation["checkpoint/best_metric"] == 0.0364
+
+    later = _apply_checkpoint_best_metric(
+        {"checkpoint/best_metric": 0.0364}, _FakeCheckpointResult(0.0212, 20)
+    )
+    assert later["checkpoint/best_metric"] == 0.0212
+
+
+def test_logged_best_metric_is_untouched_when_no_checkpoint_was_written():
+    skipped = _apply_checkpoint_best_metric({"train/total_loss": 1.0}, None)
+    assert "checkpoint/best_metric" not in skipped
+
+    no_best_yet = _apply_checkpoint_best_metric({}, _FakeCheckpointResult(None, None))
+    assert "checkpoint/best_metric" not in no_best_yet
 
 
 def test_hydra_default_config_composes_and_preserves_legacy_sections():
