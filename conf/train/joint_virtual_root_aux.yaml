@@ -13,6 +13,9 @@ TRAIN:
   SAVE_PATH: ${oc.env:TREEFORMER_TRAIN_OUTPUT,${oc.env:TREEFORMER_ASSETS_ROOT,../TreeFormer_assets}/trained_weights_hydra_joint_virtual_root_aux}
   VAL_INTERVAL: 1
   SAVE_VAL: false
+  SMD_BACKEND: legacy
+  SMD_N_POINTS: 500
+  SMD_BLUR: 0.01
   LOSSES: ["boxes", "class", "cards", "nodes", "edges_virtual_root", "root"]
   W_BBOX: 2.0
   W_CLASS: 3.0

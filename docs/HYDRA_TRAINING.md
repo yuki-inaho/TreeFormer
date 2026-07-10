@@ -233,6 +233,36 @@ This mode is intentionally separate from `train=seg_only`, `train=seg_heatmap`, 
 
 `tune_graph_optuna.py` explores heatmap sigma 3.0 and 1.5. With `DATA.SEG_CACHE_MODE=disk`, create the matching cache roots first with `just cache-private-joint-virtual-root-aux-optuna`; the runner selects `heatmap_sigma_3_0/` or `heatmap_sigma_1_5/` explicitly for each trial. A missing matching cache is an error, never a fallback to another sigma.
 
+### Optional GPU SMD validation backend
+
+The default `TRAIN.SMD_BACKEND=legacy` preserves the original NetworkX/CPU
+metric. An optional `geomloss_gpu` backend keeps the graph post-processing
+unchanged, samples each graph into a fixed-size point cloud with PyTorch, and
+computes the regularized transport cost with GeomLoss on the same device as the
+model output. It is opt-in because the point-cloud sampling convention and
+GeomLoss regularization are not guaranteed to be numerically identical to the
+legacy implementation.
+
+Install the optional dependency into the repo-local uv environment:
+
+```bash
+uv pip install --python .venv/bin/python 'geomloss>=0.2.6,<0.3'
+```
+
+Use it for a comparison run with explicit overrides:
+
+```bash
+TREEFORMER_SMD_BACKEND=geomloss_gpu \
+TREEFORMER_SMD_N_POINTS=500 \
+TREEFORMER_SMD_BLUR=0.01 \
+just train-private-joint-virtual-root-aux
+```
+
+Before using this backend for checkpoint selection, compare legacy and GPU
+validation on the same checkpoint. Record finite outputs, metric ranking, best
+epoch agreement, and representative panels. Do not report GeomLoss scores as
+bitwise-equivalent legacy SMD scores.
+
 Recommended smoke:
 
 ```bash

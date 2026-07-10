@@ -364,13 +364,25 @@ def main(cfg: DictConfig) -> None:
     else:
         from epoch import epoch_train, epoch_val
         from losses_only import SetCriterion
-        from metric_smd import StreetMoverDistance
-        from models.matcher import build_matcher
         from monai.utils import MetricReduction
+        metric_backend = str(getattr(legacy_config.TRAIN, "SMD_BACKEND", "legacy")).lower()
+        if metric_backend == "geomloss_gpu":
+            from metric_smd_gpu import GeomLossStreetMoverDistance
+
+            smd = GeomLossStreetMoverDistance(
+                n_points=int(getattr(legacy_config.TRAIN, "SMD_N_POINTS", 500)),
+                blur=float(getattr(legacy_config.TRAIN, "SMD_BLUR", 0.01)),
+            )
+        elif metric_backend == "legacy":
+            from metric_smd import StreetMoverDistance
+
+            smd = StreetMoverDistance(eps=1e-7, max_iter=100, reduction=MetricReduction.MEAN)
+        else:
+            raise ValueError(f"unsupported TRAIN.SMD_BACKEND: {metric_backend!r}")
+        from models.matcher import build_matcher
 
         matcher = build_matcher(legacy_config)
         loss = SetCriterion(config=legacy_config, matcher=matcher, net=model, args=args)
-        smd = StreetMoverDistance(eps=1e-7, max_iter=100, reduction=MetricReduction.MEAN)
     checkpoint_manager = CheckpointManager(
         cfg.checkpoint.dir,
         metric_name=str(cfg.checkpoint.metric_name),
