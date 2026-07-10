@@ -128,7 +128,29 @@ def suggest_overrides(trial: Any) -> list[str]:
     ]
 
 
-def _base_overrides(args: argparse.Namespace, train_save_path: Path, run_name: str) -> list[str]:
+def cache_root_for_heatmap_sigma(cache_root: Path, sigma: float) -> Path:
+    normalized_sigma = f"{float(sigma):.4f}".rstrip("0").rstrip(".")
+    if "." not in normalized_sigma:
+        normalized_sigma += ".0"
+    normalized_sigma = normalized_sigma.replace(".", "_")
+    return cache_root / f"heatmap_sigma_{normalized_sigma}"
+
+
+def heatmap_sigma_from_overrides(overrides: list[str]) -> float:
+    prefix = "DATA.AUX_HEATMAP_SIGMA="
+    for override in overrides:
+        if override.startswith(prefix):
+            return float(override.removeprefix(prefix))
+    raise ValueError("Optuna trial overrides must set DATA.AUX_HEATMAP_SIGMA")
+
+
+def _base_overrides(
+    args: argparse.Namespace,
+    train_save_path: Path,
+    run_name: str,
+    *,
+    seg_cache_root: Path,
+) -> list[str]:
     private_data = os.environ.get("TREEFORMER_PRIVATE_DATA", "")
     pretrained = os.environ.get(
         "TREEFORMER_PRETRAINED_CHECKPOINT",
@@ -153,10 +175,10 @@ def _base_overrides(args: argparse.Namespace, train_save_path: Path, run_name: s
         f"DATA.BATCH_SIZE={args.batch_size}",
         f"DATA.MAX_SIZE={args.max_size}",
         f"DATA.NUM_WORKERS={args.num_workers}",
-        "DATA.PERSISTENT_WORKERS=true",
+        f"DATA.PERSISTENT_WORKERS={str(args.num_workers > 0).lower()}",
         "DATA.PREFETCH_FACTOR=2",
         f"DATA.SEG_CACHE_MODE={args.seg_cache_mode}",
-        f"DATA.SEG_CACHE_ROOT={args.seg_cache_root}",
+        f"DATA.SEG_CACHE_ROOT={seg_cache_root}",
         "DATA.SEG_RESIZE_POLICY=full",
         f"DATA.TRAIN_LIMIT={args.train_limit}",
         f"DATA.VAL_LIMIT={args.val_limit}",
@@ -204,7 +226,9 @@ def _write_reports(output_root: Path, results: list[TrialResult]) -> None:
         handle.write("# TreeFormer joint graph+aux Optuna 実験レポート\n\n")
         handle.write("このレポートは repo 外の実験結果を要約したものです。private dataset の実パスは記録しません。\n\n")
         handle.write("## スコア定義\n\n")
-        handle.write("最大化対象: `-val/smd + 0.10*val/seg_iou + 0.05*val/heatmap_peak_contrast - 0.05*val/paf_masked_l1`\n\n")
+        handle.write(
+            "最大化対象: `-val/smd + 0.10*val/seg_iou + 0.05*val/heatmap_peak_contrast - 0.05*val/paf_masked_l1`\n\n"
+        )
         handle.write("## 上位 trial\n\n")
         handle.write("| rank | trial | score | val/smd | seg IoU | heatmap contrast | paf L1 | run |\n")
         handle.write("| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n")
@@ -255,8 +279,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--trials", type=int, default=20)
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--max-size", type=int, default=640)
-    parser.add_argument("--batch-size", type=int, default=8)
-    parser.add_argument("--num-workers", type=int, default=4)
+    parser.add_argument("--batch-size", type=int, default=2)
+    parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--train-limit", default="null")
     parser.add_argument("--val-limit", default="null")
     parser.add_argument("--study-name", default="joint_virtual_root_aux")
@@ -275,7 +299,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--seg-cache-root",
         type=Path,
-        default=Path(os.environ.get("TREEFORMER_SEG_CACHE_ROOT", "../TreeFormer_assets/cache/fast_seg/private_seg_max640")),
+        default=Path(
+            os.environ.get("TREEFORMER_SEG_CACHE_ROOT", "../TreeFormer_assets/cache/fast_seg/private_seg_max640")
+        ),
     )
     parser.add_argument("--seg-cache-mode", default=os.environ.get("TREEFORMER_SEG_CACHE_MODE", "disk"))
     parser.add_argument("--python", default=sys.executable)
@@ -287,7 +313,9 @@ def main() -> None:
     try:
         import optuna
     except ImportError as exc:
-        raise ImportError("Optuna tuning requires `uv pip install --python $TREEFORMER_PYTHON --project . --group tuning`.") from exc
+        raise ImportError(
+            "Optuna tuning requires `uv pip install --python $TREEFORMER_PYTHON --project . --group tuning`."
+        ) from exc
 
     args = parse_args()
     args.output_root.mkdir(parents=True, exist_ok=True)
@@ -302,9 +330,14 @@ def main() -> None:
 
     def objective(trial: Any) -> float:
         run_name = f"trial_{trial.number:03d}"
+        suggested_overrides = suggest_overrides(trial)
+        cache_root = cache_root_for_heatmap_sigma(
+            args.seg_cache_root,
+            heatmap_sigma_from_overrides(suggested_overrides),
+        )
         overrides = [
-            *_base_overrides(args, train_save_path, run_name),
-            *suggest_overrides(trial),
+            *_base_overrides(args, train_save_path, run_name, seg_cache_root=cache_root),
+            *suggested_overrides,
         ]
         trial.set_user_attr("run_name", run_name)
         trial.set_user_attr("report_overrides", sanitize_overrides_for_report(overrides))
