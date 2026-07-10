@@ -30,7 +30,17 @@ class AuxLossWeights:
     detail_support_kernel_size: int = 3
     detail_eval_threshold: float = 0.5
     heatmap: float = 1.0
+    heatmap_mse: float = 1.0
+    heatmap_focal: float = 0.0
+    heatmap_focal_alpha: float = 2.0
+    heatmap_focal_beta: float = 4.0
+    heatmap_focal_pos_threshold: float = 0.99
+    heatmap_ridge: float = 0.0
+    heatmap_ridge_threshold: float = 0.05
+    heatmap_mask_source: str = "none"
+    heatmap_mask_outside_weight: float = 1.0
     paf: float = 0.25
+    paf_mask_source: str = "paf"
 
 
 AuxLossCore = Callable[
@@ -51,6 +61,13 @@ def _as_int_tuple(value: Any, default: tuple[int, ...]) -> tuple[int, ...]:
     if isinstance(value, str):
         return tuple(int(item.strip()) for item in value.split(",") if item.strip())
     return tuple(int(item) for item in value)
+
+
+def _choice(value: Any, *, key: str, allowed: set[str], default: str) -> str:
+    normalized = str(default if value is None else value).lower().replace("-", "_")
+    if normalized not in allowed:
+        raise ValueError(f"{key} must be one of {sorted(allowed)}, got {value!r}")
+    return normalized
 
 
 def _dist_rank() -> int:
@@ -87,7 +104,27 @@ def build_aux_loss_weights(train_config: Any) -> AuxLossWeights:
         detail_support_kernel_size=int(_get(train_config, "AUX_DETAIL_SUPPORT_KERNEL_SIZE", 3)),
         detail_eval_threshold=float(_get(train_config, "AUX_DETAIL_EVAL_THRESHOLD", 0.5)),
         heatmap=float(_get(train_config, "W_AUX_HEATMAP", 1.0)),
+        heatmap_mse=float(_get(train_config, "W_AUX_HEATMAP_MSE", 1.0)),
+        heatmap_focal=float(_get(train_config, "W_AUX_HEATMAP_FOCAL", 0.0)),
+        heatmap_focal_alpha=float(_get(train_config, "AUX_HEATMAP_FOCAL_ALPHA", 2.0)),
+        heatmap_focal_beta=float(_get(train_config, "AUX_HEATMAP_FOCAL_BETA", 4.0)),
+        heatmap_focal_pos_threshold=float(_get(train_config, "AUX_HEATMAP_FOCAL_POS_THRESHOLD", 0.99)),
+        heatmap_ridge=float(_get(train_config, "W_AUX_HEATMAP_RIDGE", 0.0)),
+        heatmap_ridge_threshold=float(_get(train_config, "AUX_HEATMAP_RIDGE_THRESHOLD", 0.05)),
+        heatmap_mask_source=_choice(
+            _get(train_config, "AUX_HEATMAP_MASK_SOURCE", None),
+            key="AUX_HEATMAP_MASK_SOURCE",
+            allowed={"none", "segmentation"},
+            default="none",
+        ),
+        heatmap_mask_outside_weight=max(0.0, float(_get(train_config, "AUX_HEATMAP_MASK_OUTSIDE_WEIGHT", 1.0))),
         paf=float(_get(train_config, "W_AUX_PAF", 0.25)),
+        paf_mask_source=_choice(
+            _get(train_config, "AUX_PAF_MASK_SOURCE", None),
+            key="AUX_PAF_MASK_SOURCE",
+            allowed={"paf", "paf_and_segmentation"},
+            default="paf",
+        ),
     )
 
 
@@ -177,6 +214,72 @@ def binary_focal_loss_with_logits(
     return (alpha_t * (1.0 - p_t).pow(gamma) * bce).mean()
 
 
+def centernet_heatmap_focal_loss_with_logits(
+    logits: torch.Tensor,
+    target: torch.Tensor,
+    *,
+    alpha: float = 2.0,
+    beta: float = 4.0,
+    pos_threshold: float = 0.99,
+    weight: torch.Tensor | None = None,
+) -> torch.Tensor:
+    probabilities = torch.sigmoid(logits).clamp(1e-6, 1.0 - 1e-6)
+    positive = (target >= pos_threshold).to(dtype=target.dtype)
+    negative = 1.0 - positive
+    negative_weight = (1.0 - target).clamp_min(0.0).pow(beta)
+
+    positive_loss = -(1.0 - probabilities).pow(alpha) * probabilities.log() * positive
+    negative_loss = -probabilities.pow(alpha) * (1.0 - probabilities).log() * negative_weight * negative
+    if weight is not None:
+        positive_loss = positive_loss * weight
+        negative_loss = negative_loss * weight
+        positive_count = (positive * weight).sum()
+        negative_count = (negative * weight).sum()
+    else:
+        positive_count = positive.sum()
+        negative_count = negative.sum()
+    normalizer = torch.where(positive_count > 0.0, positive_count, negative_count.clamp_min(1.0))
+    return (positive_loss.sum() + negative_loss.sum()) / normalizer.clamp_min(1.0)
+
+
+def _weighted_mean(values: torch.Tensor, weights: torch.Tensor) -> torch.Tensor:
+    return (values * weights).sum() / weights.sum().clamp_min(1.0)
+
+
+def _masked_mean(values: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    mask = mask.to(dtype=values.dtype)
+    return (values * mask).sum() / mask.sum().clamp_min(1.0)
+
+
+def _heatmap_loss_weight(
+    seg_target: torch.Tensor, heatmap_target: torch.Tensor, weights: AuxLossWeights
+) -> torch.Tensor | None:
+    if weights.heatmap_mask_source == "none":
+        return None
+    if weights.heatmap_mask_source != "segmentation":
+        raise ValueError(f"unsupported heatmap_mask_source: {weights.heatmap_mask_source!r}")
+
+    seg_mask = (seg_target > 0.5).to(dtype=heatmap_target.dtype)
+    if seg_mask.shape[-2:] != heatmap_target.shape[-2:]:
+        seg_mask = _resize_like(seg_mask, heatmap_target, mode="nearest")
+    outside_weight = float(weights.heatmap_mask_outside_weight)
+    if outside_weight <= 0.0:
+        return seg_mask
+    return seg_mask + (1.0 - seg_mask) * outside_weight
+
+
+def _paf_loss_mask(paf_mask: torch.Tensor, seg_target: torch.Tensor, weights: AuxLossWeights) -> torch.Tensor:
+    if weights.paf_mask_source == "paf":
+        return paf_mask
+    if weights.paf_mask_source != "paf_and_segmentation":
+        raise ValueError(f"unsupported paf_mask_source: {weights.paf_mask_source!r}")
+
+    seg_mask = (seg_target > 0.5).to(dtype=paf_mask.dtype)
+    if seg_mask.shape[-2:] != paf_mask.shape[-2:]:
+        seg_mask = _resize_like(seg_mask, paf_mask, mode="nearest")
+    return paf_mask * seg_mask
+
+
 def _compute_aux_loss_terms(
     aux_maps: torch.Tensor,
     seg_target: torch.Tensor,
@@ -218,14 +321,35 @@ def _compute_aux_loss_terms(
         detail_bce = F.binary_cross_entropy_with_logits(detail_logits, detail_target)
         detail_dice = binary_dice_loss_with_logits(detail_logits, detail_target)
         detail_total = weights.detail_bce * detail_bce + weights.detail_dice * detail_dice
-    heatmap_mse = F.mse_loss(torch.sigmoid(heatmap_logits), heatmap_target)
-    paf_l1 = (torch.abs(torch.tanh(paf_pred) - paf_target) * paf_mask).sum()
-    paf_l1 = paf_l1 / (paf_mask.sum().clamp_min(1.0) * paf_target.shape[1])
+    heatmap_error = (torch.sigmoid(heatmap_logits) - heatmap_target).pow(2)
+    heatmap_weight = _heatmap_loss_weight(seg_target, heatmap_target, weights)
+    heatmap_mse = heatmap_error.mean() if heatmap_weight is None else _weighted_mean(heatmap_error, heatmap_weight)
+    heatmap_focal = centernet_heatmap_focal_loss_with_logits(
+        heatmap_logits,
+        heatmap_target,
+        alpha=weights.heatmap_focal_alpha,
+        beta=weights.heatmap_focal_beta,
+        pos_threshold=weights.heatmap_focal_pos_threshold,
+        weight=heatmap_weight,
+    )
+    heatmap_probabilities = torch.sigmoid(heatmap_logits)
+    ridge_mask = (heatmap_target < weights.heatmap_ridge_threshold).to(dtype=heatmap_target.dtype)
+    ridge_weight = ridge_mask if heatmap_weight is None else ridge_mask * heatmap_weight
+    heatmap_ridge = _weighted_mean(heatmap_probabilities.pow(2), ridge_weight)
+    heatmap_total = (
+        weights.heatmap_mse * heatmap_mse
+        + weights.heatmap_focal * heatmap_focal
+        + weights.heatmap_ridge * heatmap_ridge
+    )
+
+    active_paf_mask = _paf_loss_mask(paf_mask, seg_target, weights)
+    paf_l1 = (torch.abs(torch.tanh(paf_pred) - paf_target) * active_paf_mask).sum()
+    paf_l1 = paf_l1 / (active_paf_mask.sum().clamp_min(1.0) * paf_target.shape[1])
 
     total = (
         weights.segmentation * seg_total
         + weights.detail * detail_total
-        + weights.heatmap * heatmap_mse
+        + weights.heatmap * heatmap_total
         + weights.paf * paf_l1
     )
     return {
@@ -237,7 +361,10 @@ def _compute_aux_loss_terms(
         "detail_total": detail_total,
         "detail_bce": detail_bce,
         "detail_dice": detail_dice,
+        "heatmap_total": heatmap_total,
         "heatmap_mse": heatmap_mse,
+        "heatmap_focal": heatmap_focal,
+        "heatmap_ridge": heatmap_ridge,
         "paf_l1": paf_l1,
     }
 
@@ -337,9 +464,23 @@ def compute_aux_eval_metrics(
     pred_positive_rate = pred_positive / float(seg_pred.numel())
     target_positive_rate = truth_positive / float(seg_truth.numel())
 
-    heatmap_mae = torch.mean(torch.abs(torch.sigmoid(heatmap_logits) - heatmap_target))
-    paf_masked_l1 = (torch.abs(torch.tanh(paf_pred) - paf_target) * paf_mask).sum()
-    paf_masked_l1 = paf_masked_l1 / (paf_mask.sum().clamp_min(1.0) * paf_target.shape[1])
+    heatmap_abs_error = torch.abs(torch.sigmoid(heatmap_logits) - heatmap_target)
+    heatmap_mae = torch.mean(heatmap_abs_error)
+    heatmap_weight = _heatmap_loss_weight(seg_target, heatmap_target, weights)
+    masked_heatmap_mae = heatmap_mae if heatmap_weight is None else _weighted_mean(heatmap_abs_error, heatmap_weight)
+    heatmap_probabilities = torch.sigmoid(heatmap_logits)
+    heatmap_peak_mask = heatmap_target >= weights.heatmap_focal_pos_threshold
+    heatmap_nonpeak_foreground_mask = torch.logical_and(
+        seg_target > 0.5,
+        heatmap_target < weights.heatmap_ridge_threshold,
+    )
+    heatmap_peak_mean = _masked_mean(heatmap_probabilities, heatmap_peak_mask)
+    heatmap_nonpeak_foreground_mean = _masked_mean(heatmap_probabilities, heatmap_nonpeak_foreground_mask)
+    heatmap_peak_contrast = heatmap_peak_mean - heatmap_nonpeak_foreground_mean
+
+    active_paf_mask = _paf_loss_mask(paf_mask, seg_target, weights)
+    paf_masked_l1 = (torch.abs(torch.tanh(paf_pred) - paf_target) * active_paf_mask).sum()
+    paf_masked_l1 = paf_masked_l1 / (active_paf_mask.sum().clamp_min(1.0) * paf_target.shape[1])
     if aux_maps.shape[1] >= 5:
         detail_target = make_stdc_detail_boundary_target(
             seg_target,
@@ -382,6 +523,10 @@ def compute_aux_eval_metrics(
         "detail_pred_positive_rate": detail_pred_positive_rate,
         "detail_target_positive_rate": detail_target_positive_rate,
         "heatmap_mae": heatmap_mae,
+        "masked_heatmap_mae": masked_heatmap_mae,
+        "heatmap_peak_mean": heatmap_peak_mean,
+        "heatmap_nonpeak_foreground_mean": heatmap_nonpeak_foreground_mean,
+        "heatmap_peak_contrast": heatmap_peak_contrast,
         "paf_masked_l1": paf_masked_l1,
     }
 
@@ -445,7 +590,7 @@ def epoch_train_aux(
                     all_len,
                     losses["total"],
                     losses["seg_total"],
-                    losses["heatmap_mse"],
+                    losses["heatmap_total"],
                     losses["paf_l1"],
                     elapsed,
                 )

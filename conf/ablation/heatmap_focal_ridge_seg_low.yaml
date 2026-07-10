@@ -1,0 +1,16 @@
+# @package _global_
+TRAIN:
+  W_AUX_SEG: 0.5
+  W_AUX_HEATMAP: 1.0
+  W_AUX_HEATMAP_MSE: 0.25
+  W_AUX_HEATMAP_FOCAL: 1.0
+  AUX_HEATMAP_FOCAL_ALPHA: 2.0
+  AUX_HEATMAP_FOCAL_BETA: 4.0
+  AUX_HEATMAP_FOCAL_POS_THRESHOLD: 0.99
+  W_AUX_HEATMAP_RIDGE: 0.1
+  AUX_HEATMAP_RIDGE_THRESHOLD: 0.05
+DATA:
+  AUX_HEATMAP_SIGMA: 1.5
+log:
+  exp_name: ${oc.env:TREEFORMER_EXP_NAME,ablate_heatmap_focal_ridge_seg_low}
+  message: "Heatmap ablation: focal/ridge heatmap loss with lower segmentation task weight"

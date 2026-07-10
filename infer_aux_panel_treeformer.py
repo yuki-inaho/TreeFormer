@@ -156,6 +156,48 @@ def paf_to_rgb(paf: torch.Tensor | np.ndarray) -> Image.Image:
     return Image.fromarray((rgb * 255.0).astype(np.uint8), mode="RGB")
 
 
+def _segmentation_confidence_mask(
+    segmentation: torch.Tensor | np.ndarray,
+    target_size: tuple[int, int],
+) -> torch.Tensor:
+    mask = (
+        segmentation.detach().cpu().float()
+        if isinstance(segmentation, torch.Tensor)
+        else torch.as_tensor(segmentation, dtype=torch.float32)
+    )
+    while mask.ndim > 2:
+        mask = mask.squeeze(0) if mask.shape[0] == 1 else mask[..., 0]
+    mask = mask.clamp(0.0, 1.0).unsqueeze(0).unsqueeze(0)
+    if tuple(mask.shape[-2:]) != tuple(target_size):
+        mask = F.interpolate(mask, size=target_size, mode="bilinear", align_corners=False)
+    return mask.squeeze(0).squeeze(0)
+
+
+def mask_scalar_map_by_segmentation(
+    values: torch.Tensor | np.ndarray,
+    segmentation: torch.Tensor | np.ndarray,
+) -> torch.Tensor:
+    target = values.detach().cpu().float() if isinstance(values, torch.Tensor) else torch.as_tensor(values).float()
+    while target.ndim > 2:
+        target = target.squeeze(0) if target.shape[0] == 1 else target[..., 0]
+    mask = _segmentation_confidence_mask(segmentation, target_size=(int(target.shape[-2]), int(target.shape[-1])))
+    return target * mask
+
+
+def mask_paf_by_segmentation(
+    paf: torch.Tensor | np.ndarray,
+    segmentation: torch.Tensor | np.ndarray,
+) -> torch.Tensor:
+    target = paf.detach().cpu().float() if isinstance(paf, torch.Tensor) else torch.as_tensor(paf).float()
+    if target.ndim == 3 and target.shape[0] == 2:
+        mask = _segmentation_confidence_mask(segmentation, target_size=(int(target.shape[-2]), int(target.shape[-1])))
+        return target * mask.unsqueeze(0)
+    if target.ndim == 3 and target.shape[-1] == 2:
+        mask = _segmentation_confidence_mask(segmentation, target_size=(int(target.shape[0]), int(target.shape[1])))
+        return target * mask.unsqueeze(-1)
+    raise ValueError(f"PAF must be shaped [2,H,W] or [H,W,2], got {tuple(target.shape)}")
+
+
 def make_detail_edge_map(
     mask: torch.Tensor, *, threshold: float = 0.1, scales: tuple[int, ...] = (1, 2, 4)
 ) -> torch.Tensor:
@@ -366,6 +408,10 @@ def make_aux_panel(
     pred_segmentation = prediction["segmentation"]
     pred_heatmap = prediction["heatmap"]
     pred_paf = prediction["paf"]
+    gt_heatmap_display = mask_scalar_map_by_segmentation(gt_heatmap, gt_segmentation)
+    pred_heatmap_display = mask_scalar_map_by_segmentation(pred_heatmap, pred_segmentation)
+    gt_paf_display = mask_paf_by_segmentation(gt_paf, gt_segmentation)
+    pred_paf_display = mask_paf_by_segmentation(pred_paf, pred_segmentation)
 
     panels = [
         add_label(input_image, "Input"),
@@ -390,19 +436,19 @@ def make_aux_panel(
     if show_heatmap:
         panels.extend(
             [
-                add_label(heatmap_to_pil(gt_heatmap), "GT node heatmap"),
-                add_label(heatmap_to_pil(pred_heatmap), "Pred node heatmap"),
+                add_label(heatmap_to_pil(gt_heatmap_display), "GT node heatmap"),
+                add_label(heatmap_to_pil(pred_heatmap_display), "Pred node heatmap"),
             ]
         )
     if show_paf:
-        gt_paf_magnitude = torch.linalg.vector_norm(gt_paf, dim=0).clamp(0.0, 1.0)
-        pred_paf_magnitude = torch.linalg.vector_norm(pred_paf, dim=0).clamp(0.0, 1.0)
+        gt_paf_magnitude = torch.linalg.vector_norm(gt_paf_display, dim=0).clamp(0.0, 1.0)
+        pred_paf_magnitude = torch.linalg.vector_norm(pred_paf_display, dim=0).clamp(0.0, 1.0)
         panels.extend(
             [
                 add_label(grayscale_to_pil(gt_paf_magnitude), "GT PAF magnitude"),
                 add_label(grayscale_to_pil(pred_paf_magnitude), "Pred PAF magnitude"),
-                add_label(paf_to_rgb(gt_paf), "GT PAF direction"),
-                add_label(paf_to_rgb(pred_paf), "Pred PAF direction"),
+                add_label(paf_to_rgb(gt_paf_display), "GT PAF direction"),
+                add_label(paf_to_rgb(pred_paf_display), "Pred PAF direction"),
             ]
         )
     return make_panel_grid(panels, columns=columns, pad=pad, panel_width=panel_width)

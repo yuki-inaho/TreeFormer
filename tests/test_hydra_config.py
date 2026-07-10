@@ -158,6 +158,11 @@ def test_hydra_seg_heatmap_training_adds_node_heatmap_objective():
     assert cfg.TRAIN.W_AUX_SEG == 1.0
     assert cfg.TRAIN.W_AUX_DETAIL == 0.0
     assert cfg.TRAIN.W_AUX_HEATMAP == 1.0
+    assert cfg.TRAIN.W_AUX_HEATMAP_MSE == 1.0
+    assert cfg.TRAIN.W_AUX_HEATMAP_FOCAL == 0.0
+    assert cfg.TRAIN.W_AUX_HEATMAP_RIDGE == 0.0
+    assert cfg.TRAIN.AUX_HEATMAP_MASK_SOURCE == "segmentation"
+    assert cfg.TRAIN.AUX_HEATMAP_MASK_OUTSIDE_WEIGHT == 0.05
     assert cfg.TRAIN.W_AUX_PAF == 0.0
     assert cfg.DATA.AUX_TARGET_MODE == "seg_heatmap"
     assert cfg.DATA.AUX_HEATMAP_SIGMA == 3.0
@@ -174,12 +179,41 @@ def test_hydra_seg_heatmap_paf_training_adds_edge_direction_objective():
     assert cfg.TRAIN.SKIP_GRAPH_OUTPUT is True
     assert cfg.TRAIN.W_AUX_SEG == 1.0
     assert cfg.TRAIN.W_AUX_HEATMAP == 1.0
+    assert cfg.TRAIN.W_AUX_HEATMAP_MSE == 1.0
+    assert cfg.TRAIN.W_AUX_HEATMAP_FOCAL == 0.0
+    assert cfg.TRAIN.W_AUX_HEATMAP_RIDGE == 0.0
+    assert cfg.TRAIN.AUX_HEATMAP_MASK_SOURCE == "segmentation"
+    assert cfg.TRAIN.AUX_HEATMAP_MASK_OUTSIDE_WEIGHT == 0.05
     assert cfg.TRAIN.W_AUX_PAF == 0.25
+    assert cfg.TRAIN.AUX_PAF_MASK_SOURCE == "paf_and_segmentation"
     assert cfg.DATA.AUX_TARGET_MODE == "seg_heatmap_paf"
     assert cfg.MODEL.GRAPH_OUTPUT_ENABLED is False
     assert cfg.MODEL.AUX_HEAD.OUT_CHANNELS == 5
     assert cfg.checkpoint.metric_name == "val/aux_total_loss"
     assert cfg.checkpoint.mode == "min"
+
+
+def test_hydra_heatmap_ablation_group_overrides_loss_shape():
+    with initialize_config_dir(version_base="1.3", config_dir=str(CONF_DIR)):
+        cfg = compose(config_name="config", overrides=["train=seg_heatmap_paf", "+ablation=heatmap_focal_ridge"])
+
+    assert cfg.TRAIN.W_AUX_HEATMAP_MSE == 0.25
+    assert cfg.TRAIN.W_AUX_HEATMAP_FOCAL == 1.0
+    assert cfg.TRAIN.W_AUX_HEATMAP_RIDGE == 0.1
+    assert cfg.DATA.AUX_HEATMAP_SIGMA == 1.5
+    assert cfg.TRAIN.W_AUX_SEG == 1.0
+
+
+def test_hydra_heatmap_ablation_can_lower_segmentation_weight():
+    with initialize_config_dir(version_base="1.3", config_dir=str(CONF_DIR)):
+        cfg = compose(
+            config_name="config",
+            overrides=["train=seg_heatmap_paf", "+ablation=heatmap_focal_ridge_seg_low"],
+        )
+
+    assert cfg.TRAIN.W_AUX_SEG == 0.5
+    assert cfg.TRAIN.W_AUX_HEATMAP_FOCAL == 1.0
+    assert cfg.DATA.AUX_HEATMAP_SIGMA == 1.5
 
 
 def test_hydra_virtual_root_config_composes():
@@ -198,3 +232,37 @@ def test_hydra_virtual_root_config_composes():
     legacy = make_legacy_config(cfg)
     assert legacy.TRAIN.VIRTUAL_ROOT is True
     assert legacy.MODEL.ROOT_HEAD.ENABLED is True
+
+
+def test_hydra_joint_virtual_root_aux_config_enables_graph_and_all_aux_heads():
+    with initialize_config_dir(version_base="1.3", config_dir=str(CONF_DIR)):
+        cfg = compose(config_name="config", overrides=["train=joint_virtual_root_aux"])
+
+    assert cfg.TRAIN.MODE == "joint_graph_aux"
+    assert cfg.TRAIN.SKIP_GRAPH_OUTPUT is False
+    assert cfg.TRAIN.VIRTUAL_ROOT is True
+    assert cfg.TRAIN.POSTPROCESSOR_MODE == "vr-mst"
+    assert "edges_virtual_root" in cfg.TRAIN.LOSSES
+    assert "root" in cfg.TRAIN.LOSSES
+    assert cfg.TRAIN.W_JOINT_AUX > 0.0
+    assert cfg.TRAIN.W_AUX_SEG > 0.0
+    assert cfg.TRAIN.W_AUX_DETAIL > 0.0
+    assert cfg.TRAIN.W_AUX_HEATMAP > 0.0
+    assert cfg.TRAIN.W_AUX_PAF > 0.0
+    assert cfg.TRAIN.AUX_HEATMAP_MASK_SOURCE == "segmentation"
+    assert cfg.TRAIN.AUX_PAF_MASK_SOURCE == "paf_and_segmentation"
+    assert cfg.DATA.FOREST_METADATA is True
+    assert cfg.DATA.STRICT_VIRTUAL_ROOT_METADATA is True
+    assert cfg.DATA.FAST_SEGMENTATION_LOADER is True
+    assert cfg.DATA.AUX_TARGET_MODE == "seg_heatmap_paf"
+    assert cfg.MODEL.GRAPH_OUTPUT_ENABLED is True
+    assert cfg.MODEL.ROOT_HEAD.ENABLED is True
+    assert cfg.MODEL.AUX_HEAD.ENABLED is True
+    assert cfg.MODEL.AUX_HEAD.OUT_CHANNELS == 5
+    assert cfg.checkpoint.metric_name == "val/smd"
+
+    legacy = make_legacy_config(cfg)
+    assert legacy.TRAIN.VIRTUAL_ROOT is True
+    assert legacy.MODEL.GRAPH_OUTPUT_ENABLED is True
+    assert legacy.MODEL.ROOT_HEAD.ENABLED is True
+    assert legacy.MODEL.AUX_HEAD.ENABLED is True

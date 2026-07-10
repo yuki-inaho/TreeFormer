@@ -1,22 +1,28 @@
 # @package _global_
 TRAIN:
-  MODE: aux_supervised
-  SKIP_GRAPH_OUTPUT: true
+  MODE: joint_graph_aux
+  SKIP_GRAPH_OUTPUT: false
+  POSTPROCESSOR_MODE: vr-mst
+  VIRTUAL_ROOT: true
   EPOCHS: 1
   LR: 1e-4
   LR_BACKBONE: 3e-5
   WEIGHT_DECAY: 1e-4
   LR_DROP: 100
   CLIP_MAX_NORM: 20.0
-  SAVE_PATH: ${oc.env:TREEFORMER_TRAIN_OUTPUT,${oc.env:TREEFORMER_ASSETS_ROOT,../TreeFormer_assets}/trained_weights_hydra_seg_heatmap_paf}
+  SAVE_PATH: ${oc.env:TREEFORMER_TRAIN_OUTPUT,${oc.env:TREEFORMER_ASSETS_ROOT,../TreeFormer_assets}/trained_weights_hydra_joint_virtual_root_aux}
   VAL_INTERVAL: 1
   SAVE_VAL: false
-  LOSSES: []
-  W_BBOX: 0.0
-  W_CLASS: 0.0
-  W_CARD: 0.0
-  W_NODE: 0.0
-  W_EDGE: 0.0
+  LOSSES: ["boxes", "class", "cards", "nodes", "edges_virtual_root", "root"]
+  W_BBOX: 2.0
+  W_CLASS: 3.0
+  W_CARD: 1.0
+  W_NODE: 5.0
+  W_EDGE: 4.0
+  W_ROOT: 1.0
+  W_CROSS_EDGE: 1.0
+  W_JOINT_AUX: 0.5
+  VR_ROOT_PENALTY: 0.0
   W_AUX_SEG: 1.0
   W_AUX_SEG_BCE: 1.0
   W_AUX_SEG_DICE: 2.0
@@ -26,7 +32,7 @@ TRAIN:
   AUX_SEG_FOCAL_ALPHA: 0.75
   AUX_SEG_FOCAL_GAMMA: 2.0
   AUX_SEG_THRESHOLD: 0.5
-  W_AUX_DETAIL: 0.0
+  W_AUX_DETAIL: 0.05
   W_AUX_DETAIL_BCE: 1.0
   W_AUX_DETAIL_DICE: 1.0
   AUX_DETAIL_THRESHOLD: 0.1
@@ -46,26 +52,32 @@ TRAIN:
   W_AUX_PAF: 0.25
   AUX_PAF_MASK_SOURCE: paf_and_segmentation
 DATA:
+  FOREST_METADATA: true
+  STRICT_VIRTUAL_ROOT_METADATA: true
   SEGMENTATION_TARGET_SOURCE: external_mask
   LEGACY_ROTATE: false
   FAST_SEGMENTATION_LOADER: true
   SEG_CACHE_MODE: none
-  SEG_RESIZE_POLICY: legacy_half
+  SEG_RESIZE_POLICY: full
   AUX_TARGET_MODE: seg_heatmap_paf
   AUX_HEATMAP_SIGMA: 3.0
   AUX_HEATMAP_CUTOFF: 0.01
   AUX_PAF_LINE_THICKNESS: 2
   AUX_PAF_MASK_THICKNESS: 6
 MODEL:
-  GRAPH_OUTPUT_ENABLED: false
+  GRAPH_OUTPUT_ENABLED: true
+  ROOT_HEAD:
+    ENABLED: true
+    HIDDEN_DIM: ${MODEL.DECODER.HIDDEN_DIM}
+    NUM_LAYERS: 2
   AUX_HEAD:
     ENABLED: true
     HIDDEN_DIM: 128
     OUT_CHANNELS: 5
 checkpoint:
-  metric_name: val/aux_total_loss
+  metric_name: val/smd
   mode: min
   pretrained_strict: false
 log:
-  exp_name: hydra_seg_heatmap_paf_smoke
-  message: Hydra-managed TreeFormer segmentation, node heatmap and edge-direction supervised training
+  exp_name: hydra_joint_virtual_root_aux_smoke
+  message: Hydra-managed TreeFormer joint virtual-root graph and dense aux training

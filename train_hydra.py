@@ -156,6 +156,10 @@ def _is_aux_supervised_training(cfg: DictConfig) -> bool:
     return mode == "aux_supervised" or bool(OmegaConf.select(cfg, "TRAIN.SKIP_GRAPH_OUTPUT", default=False))
 
 
+def _is_joint_graph_aux_training(cfg: DictConfig) -> bool:
+    return str(OmegaConf.select(cfg, "TRAIN.MODE", default="graph")) == "joint_graph_aux"
+
+
 def _compile_aux_head_if_requested(model: torch.nn.Module, cfg: DictConfig) -> bool:
     if not runtime_compile_enabled(cfg.runtime, "aux_head"):
         return False
@@ -186,7 +190,10 @@ def _aux_metrics_dict(
         "train/aux_detail_total_loss": train_metrics["detail_total"],
         "train/aux_detail_bce": train_metrics["detail_bce"],
         "train/aux_detail_dice_loss": train_metrics["detail_dice"],
+        "train/aux_heatmap_total_loss": train_metrics["heatmap_total"],
         "train/aux_heatmap_mse": train_metrics["heatmap_mse"],
+        "train/aux_heatmap_focal_loss": train_metrics["heatmap_focal"],
+        "train/aux_heatmap_ridge_loss": train_metrics["heatmap_ridge"],
         "train/aux_paf_l1": train_metrics["paf_l1"],
         "val/aux_total_loss": val_metrics["total"],
         "val/seg_total_loss": val_metrics["seg_total"],
@@ -196,7 +203,10 @@ def _aux_metrics_dict(
         "val/aux_detail_total_loss": val_metrics["detail_total"],
         "val/aux_detail_bce": val_metrics["detail_bce"],
         "val/aux_detail_dice_loss": val_metrics["detail_dice"],
+        "val/aux_heatmap_total_loss": val_metrics["heatmap_total"],
         "val/aux_heatmap_mse": val_metrics["heatmap_mse"],
+        "val/aux_heatmap_focal_loss": val_metrics["heatmap_focal"],
+        "val/aux_heatmap_ridge_loss": val_metrics["heatmap_ridge"],
         "val/aux_paf_l1": val_metrics["paf_l1"],
         "val/seg_iou": val_metrics["seg_iou"],
         "val/seg_dice_score": val_metrics["seg_dice_score"],
@@ -211,7 +221,55 @@ def _aux_metrics_dict(
         "val/detail_pred_positive_rate": val_metrics["detail_pred_positive_rate"],
         "val/detail_target_positive_rate": val_metrics["detail_target_positive_rate"],
         "val/heatmap_mae": val_metrics["heatmap_mae"],
+        "val/masked_heatmap_mae": val_metrics["masked_heatmap_mae"],
+        "val/heatmap_peak_mean": val_metrics["heatmap_peak_mean"],
+        "val/heatmap_nonpeak_foreground_mean": val_metrics["heatmap_nonpeak_foreground_mean"],
+        "val/heatmap_peak_contrast": val_metrics["heatmap_peak_contrast"],
         "val/paf_masked_l1": val_metrics["paf_masked_l1"],
+        "optim/lr": lr,
+        "time/epoch_seconds": epoch_seconds,
+    }
+    if best_metric is not None:
+        metrics["checkpoint/best_metric"] = best_metric
+    return metrics
+
+
+def _joint_metrics_dict(
+    *,
+    train_metrics: dict[str, float],
+    val_smd: float,
+    val_aux_metrics: dict[str, float],
+    lr: float,
+    epoch_seconds: float,
+    best_metric: float | None,
+) -> dict[str, float]:
+    metrics = {
+        "train/joint_total_loss": train_metrics["joint_total"],
+        "train/total_loss": train_metrics["graph_total"],
+        "train/class_loss": train_metrics["graph_class"],
+        "train/nodes_loss": train_metrics["graph_nodes"],
+        "train/edges_loss": train_metrics["graph_edges"],
+        "train/boxes_loss": train_metrics["graph_boxes"],
+        "train/cards_loss": train_metrics["graph_cards"],
+        "train/aux_total_loss": train_metrics["aux_total"],
+        "train/seg_total_loss": train_metrics["aux_seg_total"],
+        "train/aux_detail_total_loss": train_metrics["aux_detail_total"],
+        "train/aux_heatmap_total_loss": train_metrics["aux_heatmap_total"],
+        "train/aux_paf_l1": train_metrics["aux_paf_l1"],
+        "val/smd": val_smd,
+        "val/aux_total_loss": val_aux_metrics["total"],
+        "val/seg_total_loss": val_aux_metrics["seg_total"],
+        "val/seg_iou": val_aux_metrics["seg_iou"],
+        "val/seg_dice_score": val_aux_metrics["seg_dice_score"],
+        "val/seg_soft_dice_score": val_aux_metrics["seg_soft_dice_score"],
+        "val/detail_iou": val_aux_metrics["detail_iou"],
+        "val/detail_dice_score": val_aux_metrics["detail_dice_score"],
+        "val/heatmap_mae": val_aux_metrics["heatmap_mae"],
+        "val/masked_heatmap_mae": val_aux_metrics["masked_heatmap_mae"],
+        "val/heatmap_peak_mean": val_aux_metrics["heatmap_peak_mean"],
+        "val/heatmap_nonpeak_foreground_mean": val_aux_metrics["heatmap_nonpeak_foreground_mean"],
+        "val/heatmap_peak_contrast": val_aux_metrics["heatmap_peak_contrast"],
+        "val/paf_masked_l1": val_aux_metrics["paf_masked_l1"],
         "optim/lr": lr,
         "time/epoch_seconds": epoch_seconds,
     }
@@ -223,6 +281,7 @@ def _aux_metrics_dict(
 @hydra.main(version_base="1.3", config_path="conf", config_name="config")
 def main(cfg: DictConfig) -> None:
     aux_supervised_training = _is_aux_supervised_training(cfg)
+    joint_graph_aux_training = _is_joint_graph_aux_training(cfg)
     if aux_supervised_training:
         cfg.MODEL.GRAPH_OUTPUT_ENABLED = False
 
@@ -242,8 +301,10 @@ def main(cfg: DictConfig) -> None:
     if distributed_context.is_rank_zero:
         print(f"Dataset splits -> Train: {len(train_loader.dataset)} | Valid: {len(val_loader.dataset)}")
 
-    if aux_supervised_training and not bool(OmegaConf.select(cfg, "MODEL.AUX_HEAD.ENABLED", default=False)):
-        raise ValueError("aux supervised training requires MODEL.AUX_HEAD.ENABLED=true")
+    if (aux_supervised_training or joint_graph_aux_training) and not bool(
+        OmegaConf.select(cfg, "MODEL.AUX_HEAD.ENABLED", default=False)
+    ):
+        raise ValueError("aux supervised or joint graph+aux training requires MODEL.AUX_HEAD.ENABLED=true")
 
     args = LegacyArgs(device=str(cfg.runtime.device), use_mst_train=True, local_rank=distributed_context.local_rank)
     model = build_model(legacy_config, args).to(device)
@@ -275,10 +336,10 @@ def main(cfg: DictConfig) -> None:
             model,
             device_ids=[distributed_context.local_rank] if device.type == "cuda" else None,
             output_device=distributed_context.local_rank if device.type == "cuda" else None,
-            find_unused_parameters=aux_supervised_training,
+            find_unused_parameters=aux_supervised_training or joint_graph_aux_training,
         )
 
-    if aux_supervised_training:
+    if aux_supervised_training or joint_graph_aux_training:
         from treeformer_train.aux_training import (
             build_aux_loss_computer,
             build_aux_loss_weights,
@@ -294,10 +355,13 @@ def main(cfg: DictConfig) -> None:
         )
         if runtime_compile_enabled(cfg.runtime, "aux_loss") and distributed_context.is_rank_zero:
             print(f"Compiled aux loss core with torch.compile options: {torch_compile_options(cfg.runtime)}")
+    else:
+        aux_loss_weights = None
+        aux_loss_computer = None
+    if aux_supervised_training:
         loss = None
         smd = None
     else:
-        aux_loss_computer = None
         from epoch import epoch_train, epoch_val
         from losses_only import SetCriterion
         from metric_smd import StreetMoverDistance
@@ -359,6 +423,24 @@ def main(cfg: DictConfig) -> None:
                 clip_max_norm=float(legacy_config.TRAIN.CLIP_MAX_NORM),
                 after_optimizer_step=(lambda **_: ema.update(model)) if ema is not None else None,
             )
+        elif joint_graph_aux_training:
+            from treeformer_train.joint_training import epoch_train_joint_graph_aux
+
+            train_metrics = epoch_train_joint_graph_aux(
+                train_loader=train_loader,
+                net=model,
+                graph_loss_function=loss,
+                optimizer=optimizer_bundle.optimizer,
+                device=device,
+                last_epoch=start_epoch,
+                epoch_now=epoch,
+                max_epoch=max_epochs,
+                aux_loss_weights=aux_loss_weights,
+                aux_loss_computer=aux_loss_computer,
+                joint_aux_weight=float(OmegaConf.select(cfg, "TRAIN.W_JOINT_AUX", default=1.0)),
+                clip_max_norm=float(legacy_config.TRAIN.CLIP_MAX_NORM),
+                after_optimizer_step=(lambda **_: ema.update(model)) if ema is not None else None,
+            )
         else:
             train_total, train_class, train_nodes, train_edges, train_boxes, train_cards = epoch_train(
                 train_loader=train_loader,
@@ -392,6 +474,32 @@ def main(cfg: DictConfig) -> None:
                     loss_weights=aux_loss_weights,
                     loss_computer=aux_loss_computer,
                 )
+        elif joint_graph_aux_training:
+            from treeformer_train.joint_training import epoch_val_aux_from_joint_loader
+
+            if ema is not None and bool(cfg.ema.evaluate):
+                with ema.average_parameters(model):
+                    val_smd = epoch_val(
+                        val_loader=val_loader, net=model, config=legacy_config, device=device, SMD=smd, args=args
+                    )
+                    val_aux_metrics = epoch_val_aux_from_joint_loader(
+                        val_loader=val_loader,
+                        net=model,
+                        device=device,
+                        loss_weights=aux_loss_weights,
+                        loss_computer=aux_loss_computer,
+                    )
+            else:
+                val_smd = epoch_val(
+                    val_loader=val_loader, net=model, config=legacy_config, device=device, SMD=smd, args=args
+                )
+                val_aux_metrics = epoch_val_aux_from_joint_loader(
+                    val_loader=val_loader,
+                    net=model,
+                    device=device,
+                    loss_weights=aux_loss_weights,
+                    loss_computer=aux_loss_computer,
+                )
         else:
             if ema is not None and bool(cfg.ema.evaluate):
                 with ema.average_parameters(model):
@@ -409,6 +517,15 @@ def main(cfg: DictConfig) -> None:
             metrics = _aux_metrics_dict(
                 train_metrics=train_metrics,
                 val_metrics=val_metrics,
+                lr=lr,
+                epoch_seconds=epoch_seconds,
+                best_metric=checkpoint_manager.best_metric,
+            )
+        elif joint_graph_aux_training:
+            metrics = _joint_metrics_dict(
+                train_metrics=train_metrics,
+                val_smd=val_smd,
+                val_aux_metrics=val_aux_metrics,
                 lr=lr,
                 epoch_seconds=epoch_seconds,
                 best_metric=checkpoint_manager.best_metric,
@@ -452,6 +569,14 @@ def main(cfg: DictConfig) -> None:
                     f"| val_aux_total={val_metrics['total']:.8f} | val_seg_iou={val_metrics['seg_iou']:.6f} "
                     f"| val_seg_dice={val_metrics['seg_dice_score']:.6f} "
                     f"| val_detail_iou={val_metrics['detail_iou']:.6f}{best_summary}"
+                )
+            elif joint_graph_aux_training:
+                print(
+                    f"Epoch {epoch}/{max_epochs} | train_joint_total={train_metrics['joint_total']:.6f} "
+                    f"| train_graph_total={train_metrics['graph_total']:.6f} "
+                    f"| train_aux_total={train_metrics['aux_total']:.6f} | val_smd={val_smd:.8f} "
+                    f"| val_seg_iou={val_aux_metrics['seg_iou']:.6f} "
+                    f"| val_heatmap_contrast={val_aux_metrics['heatmap_peak_contrast']:.6f}{best_summary}"
                 )
             else:
                 print(

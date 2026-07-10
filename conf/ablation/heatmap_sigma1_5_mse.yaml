@@ -1,0 +1,12 @@
+# @package _global_
+TRAIN:
+  W_AUX_SEG: 1.0
+  W_AUX_HEATMAP: 1.0
+  W_AUX_HEATMAP_MSE: 1.0
+  W_AUX_HEATMAP_FOCAL: 0.0
+  W_AUX_HEATMAP_RIDGE: 0.0
+DATA:
+  AUX_HEATMAP_SIGMA: 1.5
+log:
+  exp_name: ${oc.env:TREEFORMER_EXP_NAME,ablate_heatmap_sigma1_5_mse}
+  message: "Heatmap ablation: smaller Gaussian target with MSE"

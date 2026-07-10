@@ -495,7 +495,14 @@ def make_aux_diagnostic_panels(
     Prediction panels are added only when an aux checkpoint/model is supplied.
     """
 
-    from infer_aux_panel_treeformer import heatmap_to_pil, image_tensor_to_pil, overlay_map, paf_to_rgb
+    from infer_aux_panel_treeformer import (
+        heatmap_to_pil,
+        image_tensor_to_pil,
+        mask_paf_by_segmentation,
+        mask_scalar_map_by_segmentation,
+        overlay_map,
+        paf_to_rgb,
+    )
 
     input_image = image_tensor_to_pil(image)
     gt_segmentation = gt_segmentation.float().clamp(0.0, 1.0)
@@ -513,18 +520,26 @@ def make_aux_diagnostic_panels(
         )
 
     if show_heatmap:
-        panels.append(add_label(heatmap_to_pil(gt_heatmap), "GT node heatmap"))
+        panels.append(
+            add_label(heatmap_to_pil(mask_scalar_map_by_segmentation(gt_heatmap, gt_segmentation)), "GT node heatmap")
+        )
         if prediction is not None:
-            panels.append(add_label(heatmap_to_pil(prediction["heatmap"]), "Pred node heatmap"))
+            panels.append(
+                add_label(
+                    heatmap_to_pil(mask_scalar_map_by_segmentation(prediction["heatmap"], prediction["segmentation"])),
+                    "Pred node heatmap",
+                )
+            )
 
     if show_paf:
-        panels.append(add_label(paf_to_rgb(gt_paf), "GT edge direction"))
+        panels.append(add_label(paf_to_rgb(mask_paf_by_segmentation(gt_paf, gt_segmentation)), "GT edge direction"))
         if prediction is not None:
-            pred_paf = prediction["paf"].float().clamp(-1.0, 1.0)
-            pred_segmentation = prediction["segmentation"].float().clamp(0.0, 1.0)
-            if pred_paf.ndim == 3 and pred_paf.shape[0] == 2 and pred_segmentation.ndim == 2:
-                pred_paf = pred_paf * pred_segmentation.unsqueeze(0)
-            panels.append(add_label(paf_to_rgb(pred_paf), "Pred edge direction"))
+            panels.append(
+                add_label(
+                    paf_to_rgb(mask_paf_by_segmentation(prediction["paf"], prediction["segmentation"])),
+                    "Pred edge direction",
+                )
+            )
 
     return panels
 

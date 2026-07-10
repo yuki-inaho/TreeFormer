@@ -148,15 +148,178 @@ Operational notes:
 - External mask images may be stored as `0/255` PNGs; the loader thresholds them to binary float targets before BCE / Dice / Focal loss, and the loss code rejects targets outside `[0, 1]`.
 - The default segmentation loss uses binary BCE + Dice with Focal disabled. `AUX_SEG_POS_WEIGHT=auto` is capped conservatively so rare foreground does not cause broad positive overprediction.
 - `train=seg_only`, `train=seg_heatmap`, and `train=seg_heatmap_paf` use `FastSegSupervisedDataset` by default. `DATA.AUX_TARGET_MODE=seg_only` returns zero-valued unused PAF/heatmap tensors. `DATA.AUX_TARGET_MODE=seg_heatmap` generates only node heatmap targets and leaves PAF tensors zero. `DATA.AUX_TARGET_MODE=seg_heatmap_paf` generates both node heatmap and PAF / edge-direction targets. For precomputed repo-external cache, use `just cache-private-fast-seg`, `just cache-private-fast-seg-heatmap`, or `just cache-private-fast-seg-heatmap-paf` respectively.
+- Heatmap and PAF supervision are segmentation-aware in the dense aux modes. `train=seg_heatmap` and `train=seg_heatmap_paf` use `AUX_HEATMAP_MASK_SOURCE=segmentation` with a small `AUX_HEATMAP_MASK_OUTSIDE_WEIGHT=0.05`, so node heatmap loss focuses on foreground while still weakly suppressing outside activations. `train=seg_heatmap_paf` also uses `AUX_PAF_MASK_SOURCE=paf_and_segmentation`, so edge-direction loss is evaluated on the graph PAF band intersected with the external segmentation mask.
+- Heatmap supervision is ablation-ready. The default remains Gaussian MSE with `W_AUX_HEATMAP_MSE=1`, `W_AUX_HEATMAP_FOCAL=0`, and `W_AUX_HEATMAP_RIDGE=0`. `+ablation=...` configs can switch to smaller Gaussian targets, CenterNet-style focal heatmap loss, foreground ridge suppression, or lower segmentation task weight without changing model architecture.
 - `train=seg_supervised` adds a weak optional STDC-style detail boundary auxiliary head as the fifth aux channel. Its target is a multi-scale Laplacian boundary map derived from the external segmentation mask, not a graph edge or PAF. `W_AUX_DETAIL=0.1` keeps it as a light boundary-sharpening regularizer while BCE + Dice segmentation remains the primary objective.
 - For full segmentation-only training, generate repo-external cache first with `just cache-private-fast-seg`, then run `just train-private-seg-supervised`. The full recipe uses `DATA.SEG_CACHE_MODE=disk`, `DATA.NUM_WORKERS=4`, `DATA.PERSISTENT_WORKERS=true`, and `DATA.PREFETCH_FACTOR=2` by default. Set `TREEFORMER_SEG_CACHE_MODE=none` to bypass disk cache.
-- `FastSegSupervisedDataset` defaults to `DATA.SEG_RESIZE_POLICY=legacy_half`, matching the legacy loader behavior that halves the raw image before applying `DATA.MAX_SIZE`. For a raw 800x600 image, `DATA.MAX_SIZE=128` becomes 128x96 and `DATA.MAX_SIZE=512` still caps at 400x300. Use `DATA.SEG_RESIZE_POLICY=full` with `DATA.MAX_SIZE=512` to train at 512x384 from the original image.
+- `FastSegSupervisedDataset` defaults to `DATA.SEG_RESIZE_POLICY=legacy_half`, matching the legacy loader behavior that halves the raw image before applying `DATA.MAX_SIZE`. For a raw 800x600 image, `DATA.MAX_SIZE=128` becomes 128x96 and `DATA.MAX_SIZE=512` still caps at 400x300. Use `DATA.SEG_RESIZE_POLICY=full` with `DATA.MAX_SIZE=512` to train at 512x384, or `DATA.SEG_RESIZE_POLICY=full` with `DATA.MAX_SIZE=800` to keep the original 800x600 shape.
 - Aux/seg stages may keep EMA updates enabled, but use `ema.evaluate=false` for validation and best-checkpoint selection because the aux head is newly initialized and `decay=0.9999` changes too slowly during short stages.
 - To initialize a dense stage from a previous Hydra `best.pt`, set `TREEFORMER_PRETRAINED_CHECKPOINT=<best.pt>` and `TREEFORMER_PRETRAINED_KEY=model`. Fork-source checkpoints keep the default `TREEFORMER_PRETRAINED_KEY=net`.
 - RGB input is normalized by the legacy loader with `Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])`, so model input is scaled from `[0, 1]` to `[-1, 1]`.
 - In `train=seg_only` and `train=seg_supervised`, `W_AUX_HEATMAP=0` and `W_AUX_PAF=0`; heatmap and PAF channels are not trained in those stages. In `train=seg_heatmap`, `W_AUX_HEATMAP=1` and `W_AUX_PAF=0`. In `train=seg_heatmap_paf`, `W_AUX_HEATMAP=1` and `W_AUX_PAF=0.25`, so the edge-direction channels are trained together with segmentation and node heatmaps. The aux output layout is segmentation, heatmap, PAF-x, PAF-y, optional detail boundary. `train=aux_supervised` keeps the original 4-channel layout and has `W_AUX_DETAIL=0`.
 - Keep `DATA.BATCH_SIZE=12` and `DATA.MAX_SIZE=128` unless the GPU is shared or memory pressure is observed.
-- Monitor `val/seg_soft_dice_score`, `val/seg_dice_score`, `val/seg_iou`, `val/seg_precision`, `val/seg_recall`, and `val/pred_positive_rate`; do not interpret `val/smd` for this mode because graph validation is intentionally skipped. `val/seg_dice_score` and IoU are hard-threshold metrics at `AUX_SEG_THRESHOLD`; early runs may show zero while soft Dice and loss still improve.
+- Monitor `val/seg_soft_dice_score`, `val/seg_dice_score`, `val/seg_iou`, `val/seg_precision`, `val/seg_recall`, `val/pred_positive_rate`, and when heatmap is enabled `val/masked_heatmap_mae`; do not interpret `val/smd` for this mode because graph validation is intentionally skipped. `val/seg_dice_score` and IoU are hard-threshold metrics at `AUX_SEG_THRESHOLD`; early runs may show zero while soft Dice and loss still improve.
+- For heatmap ablations, also monitor `val/heatmap_peak_contrast`, `val/heatmap_peak_mean`, and `val/heatmap_nonpeak_foreground_mean`. The desired direction is higher peak contrast while preserving segmentation IoU/Dice and keeping `val/paf_masked_l1` from regressing.
+
+## Dense Aux Ablation Study
+
+Use this study when segmentation and PAF look learnable but node heatmap remains ridge-like instead of point-like. The study intentionally avoids architecture changes. It varies only target sigma, heatmap loss composition, ridge suppression, and segmentation task weight.
+
+Initial ablation matrix:
+
+| ID | Hydra override | Target sigma | Heatmap loss | Seg weight | Question |
+|---|---|---:|---|---:|---|
+| A0 | `+ablation=heatmap_mse_baseline` | 3.0 | MSE | 1.0 | Reproduce the current 640x480 seg+heatmap+PAF behavior. |
+| A1 | `+ablation=heatmap_sigma1_5_mse` | 1.5 | MSE | 1.0 | Does a smaller Gaussian target make heatmap peaks less ridge-like by itself? |
+| A2 | `+ablation=heatmap_focal` | 1.5 | `0.25*MSE + focal` | 1.0 | Does CenterNet-style focal loss improve point contrast without hurting segmentation? |
+| A3 | `+ablation=heatmap_focal_ridge` | 1.5 | `0.25*MSE + focal + 0.1*ridge` | 1.0 | Does foreground non-peak suppression reduce continuous heatmap bands? |
+| A4 | `+ablation=heatmap_focal_ridge_seg_low` | 1.5 | `0.25*MSE + focal + 0.1*ridge` | 0.5 | Does reducing segmentation loss pressure help heatmap pointness? |
+
+For sigma-changing ablations, regenerate or extend the repo-external cache with the same sigma used by the training config:
+
+```bash
+export TREEFORMER_PRIVATE_DATA=<legacy_treeformer_dataset_root>
+export TREEFORMER_MAX_SIZE=640
+export TREEFORMER_SEG_RESIZE_POLICY=full
+export TREEFORMER_BATCH_SIZE=8
+
+# A0
+export TREEFORMER_ABLATION=heatmap_mse_baseline
+export TREEFORMER_HEATMAP_SIGMA=3.0
+just cache-private-fast-seg-heatmap-paf-ablation
+just train-private-seg-heatmap-paf-ablation
+
+# A1-A4
+export TREEFORMER_HEATMAP_SIGMA=1.5
+for name in heatmap_sigma1_5_mse heatmap_focal heatmap_focal_ridge heatmap_focal_ridge_seg_low; do
+  export TREEFORMER_ABLATION="$name"
+  just cache-private-fast-seg-heatmap-paf-ablation
+  just train-private-seg-heatmap-paf-ablation
+done
+```
+
+Use `smoke-private-seg-heatmap-paf-ablation` before full runs when changing the matrix. After runs finish:
+
+```bash
+just summarize-private-aux-ablation
+export TREEFORMER_AUX_CHECKPOINT=<ablation_best_checkpoint>
+export TREEFORMER_AUX_PANEL_OUTPUT=${TREEFORMER_ASSETS_ROOT:-../TreeFormer_assets}/aux_inference_panels/<ablation_name>
+just infer-aux-panels
+```
+
+Decision rule:
+
+- Prefer the run with the best combination of high `val/heatmap_peak_contrast`, low `val/masked_heatmap_mae`, stable or improved `val/seg_iou` / `val/seg_dice_score`, and non-regressed `val/paf_masked_l1`.
+- Do not choose a run solely because `val/aux_total_loss` is lower; focal/ridge loss changes the numeric scale.
+- If all heatmap ablations remain ridge-like, next experiments should be local soft-argmax / peakness loss or query-level supervision, not semseg-feature concatenation.
+
+## Joint Virtual-Root Graph + Aux Tuning
+
+`train=joint_virtual_root_aux` is the graph-stage mode for final reconstruction tuning. It keeps graph output enabled and trains the virtual-root graph objective together with every currently available dense auxiliary head:
+
+- virtual-root forest metadata and `POSTPROCESSOR_MODE=vr-mst`
+- root head and root loss
+- graph losses: boxes, class, cards, nodes, virtual-root edges, root
+- dense aux losses: external-mask segmentation, STDC-style detail boundary, node heatmap, PAF / edge-direction
+- segmentation-aware heatmap and PAF masking
+
+The joint objective is:
+
+```text
+joint_total = graph_total + TRAIN.W_JOINT_AUX * aux_total
+```
+
+This mode is intentionally separate from `train=seg_only`, `train=seg_heatmap`, and `train=seg_heatmap_paf`. Dense-only modes keep graph loss at zero to verify target quality. `train=joint_virtual_root_aux` is used after dense targets are known to be learnable and the goal is graph reconstruction.
+
+Recommended smoke:
+
+```bash
+export TREEFORMER_PRIVATE_DATA=<legacy_treeformer_dataset_root>
+export TREEFORMER_MAX_SIZE=640
+export TREEFORMER_BATCH_SIZE=2
+export TREEFORMER_SEG_RESIZE_POLICY=full
+
+just cfg-private-joint-virtual-root-aux
+just smoke-private-joint-virtual-root-aux
+```
+
+Recommended full single run:
+
+```bash
+export TREEFORMER_PRIVATE_DATA=<legacy_treeformer_dataset_root>
+export TREEFORMER_MAX_SIZE=640
+export TREEFORMER_BATCH_SIZE=8
+export TREEFORMER_EPOCHS=100
+export TREEFORMER_SEG_CACHE_MODE=disk
+export TREEFORMER_SEG_CACHE_ROOT=${TREEFORMER_ASSETS_ROOT:-../TreeFormer_assets}/cache/fast_seg/<cache_name>
+
+just cache-private-fast-seg-heatmap-paf
+just train-private-joint-virtual-root-aux
+```
+
+For storage control, joint/Optuna recipes set `checkpoint.save_last=false`; keep `best.pt`, TensorBoard scalar logs, and report files. If resume-from-last is required for a specific run, override `checkpoint.save_last=true` explicitly and clean it up after the run.
+
+### Optuna
+
+Optuna is optional. Install it into the uv environment only when tuning:
+
+```bash
+just install-optuna
+```
+
+Default tuning command:
+
+```bash
+export TREEFORMER_PRIVATE_DATA=<legacy_treeformer_dataset_root>
+export TREEFORMER_MAX_SIZE=640
+export TREEFORMER_BATCH_SIZE=8
+export TREEFORMER_EPOCHS=100
+export TREEFORMER_OPTUNA_TRIALS=20
+export TREEFORMER_SEG_CACHE_MODE=disk
+export TREEFORMER_SEG_CACHE_ROOT=${TREEFORMER_ASSETS_ROOT:-../TreeFormer_assets}/cache/fast_seg/<cache_name>
+
+just tune-private-joint-virtual-root-aux
+```
+
+For a short runner smoke, keep the same command shape and constrain the dataset:
+
+```bash
+export TREEFORMER_OPTUNA_TRIALS=1
+export TREEFORMER_EPOCHS=1
+export TREEFORMER_BATCH_SIZE=1
+export TREEFORMER_TRAIN_LIMIT=2
+export TREEFORMER_VAL_LIMIT=1
+export TREEFORMER_SEG_CACHE_MODE=none
+
+just tune-private-joint-virtual-root-aux
+```
+
+The runner writes repo-external outputs under `${TREEFORMER_OPTUNA_OUTPUT:-${TREEFORMER_ASSETS_ROOT}/optuna/joint_virtual_root_aux}`:
+
+- `optuna_study.db`: resumable SQLite study
+- `trials.csv`: machine-readable trial table for other agents
+- `report.md`: Japanese summary for other agents
+- `best_trial_overrides.yaml`: winning parameter values for manual review
+- `training/runs/<trial>_<seed>/checkpoints/best.pt`: best checkpoint for each completed trial
+
+The objective is maximized:
+
+```text
+-val/smd + 0.10*val/seg_iou + 0.05*val/heatmap_peak_contrast - 0.05*val/paf_masked_l1
+```
+
+This is a pragmatic proxy until the heavier graph evaluator is wired into the trial loop. `val/smd` remains the dominant term, while dense aux metrics prevent Optuna from selecting graph-only improvements that destroy segmentation, node heatmap, or edge-direction supervision.
+
+The search space is intentionally conservative:
+
+- `TRAIN.LR`, `TRAIN.LR_BACKBONE`
+- `TRAIN.W_NODE`, `TRAIN.W_EDGE`, `TRAIN.W_ROOT`
+- `TRAIN.W_JOINT_AUX`
+- `TRAIN.W_AUX_SEG`, `TRAIN.W_AUX_DETAIL`, `TRAIN.W_AUX_HEATMAP`, `TRAIN.W_AUX_PAF`
+- heatmap profile: MSE baseline, sigma 1.5 MSE, focal, focal + ridge
+- `TRAIN.CLIP_MAX_NORM`
+
+Do not commit Optuna DBs, trial checkpoints, TensorBoard events, CSV reports, or generated panels. The Markdown report must not include private dataset paths; pass dataset locations through environment variables only.
 
 ## Augmentation
 

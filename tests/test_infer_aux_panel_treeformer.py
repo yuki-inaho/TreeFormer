@@ -12,6 +12,8 @@ from infer_aux_panel_treeformer import (
     image_tensor_to_pil,
     make_aux_panel,
     make_detail_edge_map,
+    mask_paf_by_segmentation,
+    mask_scalar_map_by_segmentation,
     paf_to_rgb,
     unpack_aux_panel_sample,
     write_aux_summary_json,
@@ -41,6 +43,19 @@ def test_aux_visualization_helpers_return_rgb_images():
     assert image_tensor_to_pil(image).mode == "RGB"
     assert heatmap_to_pil(heatmap).mode == "RGB"
     assert paf_to_rgb(paf).mode == "RGB"
+
+
+def test_aux_visualization_helpers_mask_maps_by_segmentation_confidence():
+    heatmap = torch.ones(8, 10)
+    paf = torch.ones(2, 8, 10)
+    empty_segmentation = torch.zeros(8, 10)
+    foreground_segmentation = torch.zeros(8, 10)
+    foreground_segmentation[2:6, 3:7] = 1.0
+
+    assert mask_scalar_map_by_segmentation(heatmap, empty_segmentation).max().item() == 0.0
+    assert mask_paf_by_segmentation(paf, empty_segmentation).max().item() == 0.0
+    assert mask_scalar_map_by_segmentation(heatmap, foreground_segmentation).sum().item() == 16.0
+    assert mask_paf_by_segmentation(paf, foreground_segmentation).sum().item() == 32.0
 
 
 def test_make_aux_panel_and_summary_json(tmp_path: Path):

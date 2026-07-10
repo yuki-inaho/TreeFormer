@@ -1,0 +1,12 @@
+# @package _global_
+TRAIN:
+  W_AUX_SEG: 1.0
+  W_AUX_HEATMAP: 1.0
+  W_AUX_HEATMAP_MSE: 1.0
+  W_AUX_HEATMAP_FOCAL: 0.0
+  W_AUX_HEATMAP_RIDGE: 0.0
+DATA:
+  AUX_HEATMAP_SIGMA: 3.0
+log:
+  exp_name: ${oc.env:TREEFORMER_EXP_NAME,ablate_heatmap_mse_baseline}
+  message: "Heatmap ablation baseline: segmentation plus Gaussian heatmap MSE"
