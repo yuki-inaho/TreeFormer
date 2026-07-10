@@ -233,6 +233,23 @@ This mode is intentionally separate from `train=seg_only`, `train=seg_heatmap`, 
 
 `tune_graph_optuna.py` explores heatmap sigma 3.0 and 1.5. With `DATA.SEG_CACHE_MODE=disk`, create the matching cache roots first with `just cache-private-joint-virtual-root-aux-optuna`; the runner selects `heatmap_sigma_3_0/` or `heatmap_sigma_1_5/` explicitly for each trial. A missing matching cache is an error, never a fallback to another sigma.
 
+### Validation interval
+
+`TRAIN.VAL_INTERVAL` controls how often the validation pass runs. The default is `1`, which preserves validation every epoch. For longer training runs, set `TRAIN.VAL_INTERVAL=5` or `TRAIN.VAL_INTERVAL=10`; validation runs on those epoch boundaries and always on the final epoch. Training loss, learning rate, epoch time, and `validation/ran` are logged every epoch. On skipped epochs, checkpoint updates are deferred until the next validation epoch because the checkpoint manager requires the configured validation metric.
+
+The same setting can be supplied through the standard training recipes:
+
+```bash
+TREEFORMER_VAL_INTERVAL=5 just train-private-joint-virtual-root-aux
+```
+
+An explicit Hydra override takes precedence when invoking `train_hydra.py` directly:
+
+```bash
+PYTHONPATH=. .venv/bin/python train_hydra.py \
+  train=joint_virtual_root_aux TRAIN.VAL_INTERVAL=10
+```
+
 ### Optional GPU SMD validation backend
 
 The default `TRAIN.SMD_BACKEND=legacy` preserves the original NetworkX/CPU
@@ -621,7 +638,7 @@ For `train=aux_supervised`, expected tags instead include:
 
 Checkpoints are written by `CheckpointManager`:
 
-- `last.pt`: always updated when enabled.
+- `last.pt`: updated on validation epochs when enabled. With `TRAIN.VAL_INTERVAL>1`, the latest non-validation epoch is not checkpointed; use a smaller interval if interruption-resume granularity matters.
 - `best.pt`: updated only when `checkpoint.metric_name` improves according to `checkpoint.mode`.
 - `epoch_000000.pt`: periodic checkpoint when `checkpoint.save_every > 0`.
 

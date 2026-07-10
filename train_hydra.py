@@ -124,6 +124,100 @@ def _load_resume_if_requested(
     return int(checkpoint["epoch"]) + 1
 
 
+def _validation_interval(config: Any) -> int:
+    """Return the configured validation interval and reject invalid values."""
+    raw_interval = getattr(config.TRAIN, "VAL_INTERVAL", 1)
+    try:
+        interval = int(raw_interval)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"TRAIN.VAL_INTERVAL must be a positive integer, got {raw_interval!r}") from exc
+    if isinstance(raw_interval, float) and raw_interval != interval:
+        raise ValueError(f"TRAIN.VAL_INTERVAL must be a positive integer, got {raw_interval!r}")
+    if interval < 1:
+        raise ValueError(f"TRAIN.VAL_INTERVAL must be a positive integer, got {raw_interval!r}")
+    return interval
+
+
+def _should_run_validation(*, epoch: int, max_epochs: int, interval: int) -> bool:
+    """Validate on interval boundaries and always on the final epoch."""
+    if interval < 1:
+        raise ValueError(f"validation interval must be positive, got {interval}")
+    return epoch == max_epochs or epoch % interval == 0
+
+
+def _train_only_metrics(
+    *,
+    mode: str,
+    train_metrics: dict[str, float] | None = None,
+    graph_values: tuple[float, float, float, float, float, float] | None = None,
+    lr: float,
+    epoch_seconds: float,
+) -> dict[str, float]:
+    """Build per-epoch training metrics when validation is intentionally skipped."""
+    metrics: dict[str, float] = {
+        "validation/ran": 0.0,
+        "optim/lr": lr,
+        "time/epoch_seconds": epoch_seconds,
+    }
+    if mode in {"aux", "joint"}:
+        if train_metrics is None:
+            raise ValueError(f"train metrics are required for mode={mode!r}")
+        metrics.update(
+            {
+                "train/aux_total_loss": train_metrics["total"] if mode == "aux" else train_metrics["aux_total"],
+                "train/seg_total_loss": train_metrics["seg_total"]
+                if mode == "aux"
+                else train_metrics["aux_seg_total"],
+                "train/aux_detail_total_loss": train_metrics["detail_total"]
+                if mode == "aux"
+                else train_metrics["aux_detail_total"],
+                "train/aux_heatmap_total_loss": train_metrics["heatmap_total"]
+                if mode == "aux"
+                else train_metrics["aux_heatmap_total"],
+                "train/aux_paf_l1": train_metrics["paf_l1"] if mode == "aux" else train_metrics["aux_paf_l1"],
+            }
+        )
+        if mode == "joint":
+            metrics.update(
+                {
+                    "train/total_loss": train_metrics["graph_total"],
+                    "train/class_loss": train_metrics["graph_class"],
+                    "train/nodes_loss": train_metrics["graph_nodes"],
+                    "train/edges_loss": train_metrics["graph_edges"],
+                    "train/boxes_loss": train_metrics["graph_boxes"],
+                    "train/cards_loss": train_metrics["graph_cards"],
+                }
+            )
+        if mode == "aux":
+            metrics.update(
+                {
+                    "train/aux_seg_bce": train_metrics["seg_bce"],
+                    "train/aux_seg_dice_loss": train_metrics["seg_dice"],
+                    "train/aux_seg_focal_loss": train_metrics["seg_focal"],
+                    "train/aux_detail_bce": train_metrics["detail_bce"],
+                    "train/aux_detail_dice_loss": train_metrics["detail_dice"],
+                    "train/aux_heatmap_mse": train_metrics["heatmap_mse"],
+                    "train/aux_heatmap_focal_loss": train_metrics["heatmap_focal"],
+                    "train/aux_heatmap_ridge_loss": train_metrics["heatmap_ridge"],
+                }
+            )
+        return metrics
+    if mode != "graph" or graph_values is None:
+        raise ValueError(f"graph values are required for mode={mode!r}")
+    train_total, train_class, train_nodes, train_edges, train_boxes, train_cards = graph_values
+    metrics.update(
+        {
+            "train/total_loss": train_total,
+            "train/class_loss": train_class,
+            "train/nodes_loss": train_nodes,
+            "train/edges_loss": train_edges,
+            "train/boxes_loss": train_boxes,
+            "train/cards_loss": train_cards,
+        }
+    )
+    return metrics
+
+
 def _metrics_dict(
     *,
     train_total: float,
@@ -138,6 +232,7 @@ def _metrics_dict(
     best_metric: float | None,
 ) -> dict[str, float]:
     metrics = {
+        "validation/ran": 1.0,
         "train/total_loss": train_total,
         "train/class_loss": train_class,
         "train/nodes_loss": train_nodes,
@@ -184,6 +279,7 @@ def _aux_metrics_dict(
     best_metric: float | None,
 ) -> dict[str, float]:
     metrics = {
+        "validation/ran": 1.0,
         "train/aux_total_loss": train_metrics["total"],
         "train/seg_total_loss": train_metrics["seg_total"],
         "train/aux_seg_bce": train_metrics["seg_bce"],
@@ -246,6 +342,7 @@ def _joint_metrics_dict(
     best_metric: float | None,
 ) -> dict[str, float]:
     metrics = {
+        "validation/ran": 1.0,
         "train/joint_total_loss": train_metrics["joint_total"],
         "train/total_loss": train_metrics["graph_total"],
         "train/class_loss": train_metrics["graph_class"],
@@ -416,6 +513,7 @@ def main(cfg: DictConfig) -> None:
         map_location=device,
     )
     max_epochs = int(legacy_config.TRAIN.EPOCHS)
+    validation_interval = _validation_interval(legacy_config)
     if max_epochs <= 0:
         if distributed_context.is_rank_zero:
             print(
@@ -482,10 +580,24 @@ def main(cfg: DictConfig) -> None:
                 after_optimizer_step=(lambda **_: ema.update(model)) if ema is not None else None,
             )
 
-        set_optimizer_eval_mode(optimizer_bundle.optimizer, required=optimizer_bundle.requires_train_eval)
-        if aux_supervised_training:
-            if ema is not None and bool(cfg.ema.evaluate):
-                with ema.average_parameters(model):
+        should_validate = _should_run_validation(
+            epoch=epoch,
+            max_epochs=max_epochs,
+            interval=validation_interval,
+        )
+        if should_validate:
+            set_optimizer_eval_mode(optimizer_bundle.optimizer, required=optimizer_bundle.requires_train_eval)
+            if aux_supervised_training:
+                if ema is not None and bool(cfg.ema.evaluate):
+                    with ema.average_parameters(model):
+                        val_metrics = epoch_val_aux(
+                            val_loader=val_loader,
+                            net=model,
+                            device=device,
+                            loss_weights=aux_loss_weights,
+                            loss_computer=aux_loss_computer,
+                        )
+                else:
                     val_metrics = epoch_val_aux(
                         val_loader=val_loader,
                         net=model,
@@ -493,19 +605,25 @@ def main(cfg: DictConfig) -> None:
                         loss_weights=aux_loss_weights,
                         loss_computer=aux_loss_computer,
                     )
-            else:
-                val_metrics = epoch_val_aux(
-                    val_loader=val_loader,
-                    net=model,
-                    device=device,
-                    loss_weights=aux_loss_weights,
-                    loss_computer=aux_loss_computer,
-                )
-        elif joint_graph_aux_training:
-            from treeformer_train.joint_training import epoch_val_aux_from_joint_loader
+            elif joint_graph_aux_training:
+                from treeformer_train.joint_training import epoch_val_aux_from_joint_loader
 
-            if ema is not None and bool(cfg.ema.evaluate):
-                with ema.average_parameters(model):
+                if ema is not None and bool(cfg.ema.evaluate):
+                    with ema.average_parameters(model):
+                        val_smd = epoch_val(
+                            val_loader=val_loader, net=model, config=legacy_config, device=device, SMD=smd, args=args,
+                            amp_enabled=amp_enabled, amp_dtype=selected_amp_dtype
+                        )
+                        val_aux_metrics = epoch_val_aux_from_joint_loader(
+                            val_loader=val_loader,
+                            net=model,
+                            device=device,
+                            loss_weights=aux_loss_weights,
+                            loss_computer=aux_loss_computer,
+                            amp_enabled=amp_enabled,
+                            amp_dtype=selected_amp_dtype,
+                        )
+                else:
                     val_smd = epoch_val(
                         val_loader=val_loader, net=model, config=legacy_config, device=device, SMD=smd, args=args,
                         amp_enabled=amp_enabled, amp_dtype=selected_amp_dtype
@@ -520,35 +638,42 @@ def main(cfg: DictConfig) -> None:
                         amp_dtype=selected_amp_dtype,
                     )
             else:
-                val_smd = epoch_val(
-                    val_loader=val_loader, net=model, config=legacy_config, device=device, SMD=smd, args=args,
-                    amp_enabled=amp_enabled, amp_dtype=selected_amp_dtype
-                )
-                val_aux_metrics = epoch_val_aux_from_joint_loader(
-                    val_loader=val_loader,
-                    net=model,
-                    device=device,
-                    loss_weights=aux_loss_weights,
-                    loss_computer=aux_loss_computer,
-                    amp_enabled=amp_enabled,
-                    amp_dtype=selected_amp_dtype,
-                )
-        else:
-            if ema is not None and bool(cfg.ema.evaluate):
-                with ema.average_parameters(model):
+                if ema is not None and bool(cfg.ema.evaluate):
+                    with ema.average_parameters(model):
+                        val_smd = epoch_val(
+                            val_loader=val_loader, net=model, config=legacy_config, device=device, SMD=smd, args=args,
+                            amp_enabled=amp_enabled, amp_dtype=selected_amp_dtype
+                        )
+                else:
                     val_smd = epoch_val(
                         val_loader=val_loader, net=model, config=legacy_config, device=device, SMD=smd, args=args,
                         amp_enabled=amp_enabled, amp_dtype=selected_amp_dtype
                     )
-            else:
-                val_smd = epoch_val(
-                    val_loader=val_loader, net=model, config=legacy_config, device=device, SMD=smd, args=args,
-                    amp_enabled=amp_enabled, amp_dtype=selected_amp_dtype
-                )
 
         epoch_seconds = time.time() - epoch_start
         lr = float(optimizer_bundle.optimizer.param_groups[0]["lr"])
-        if aux_supervised_training:
+        if not should_validate and aux_supervised_training:
+            metrics = _train_only_metrics(
+                mode="aux",
+                train_metrics=train_metrics,
+                lr=lr,
+                epoch_seconds=epoch_seconds,
+            )
+        elif not should_validate and joint_graph_aux_training:
+            metrics = _train_only_metrics(
+                mode="joint",
+                train_metrics=train_metrics,
+                lr=lr,
+                epoch_seconds=epoch_seconds,
+            )
+        elif not should_validate:
+            metrics = _train_only_metrics(
+                mode="graph",
+                graph_values=(train_total, train_class, train_nodes, train_edges, train_boxes, train_cards),
+                lr=lr,
+                epoch_seconds=epoch_seconds,
+            )
+        elif aux_supervised_training:
             metrics = _aux_metrics_dict(
                 train_metrics=train_metrics,
                 val_metrics=val_metrics,
@@ -582,7 +707,7 @@ def main(cfg: DictConfig) -> None:
         if distributed_context.is_rank_zero:
             writer.add_scalars(epoch, metrics)
             checkpoint_result = None
-            if bool(cfg.checkpoint.enabled):
+            if should_validate and bool(cfg.checkpoint.enabled):
                 checkpoint_result = checkpoint_manager.save(
                     epoch=epoch,
                     model=model,
@@ -598,14 +723,14 @@ def main(cfg: DictConfig) -> None:
                 if checkpoint_result is not None
                 else ""
             )
-            if aux_supervised_training:
+            if aux_supervised_training and should_validate:
                 print(
                     f"Epoch {epoch}/{max_epochs} | train_aux_total={train_metrics['total']:.6f} "
                     f"| val_aux_total={val_metrics['total']:.8f} | val_seg_iou={val_metrics['seg_iou']:.6f} "
                     f"| val_seg_dice={val_metrics['seg_dice_score']:.6f} "
                     f"| val_detail_iou={val_metrics['detail_iou']:.6f}{best_summary}"
                 )
-            elif joint_graph_aux_training:
+            elif joint_graph_aux_training and should_validate:
                 print(
                     f"Epoch {epoch}/{max_epochs} | train_joint_total={train_metrics['joint_total']:.6f} "
                     f"| train_graph_total={train_metrics['graph_total']:.6f} "
@@ -613,10 +738,22 @@ def main(cfg: DictConfig) -> None:
                     f"| val_seg_iou={val_aux_metrics['seg_iou']:.6f} "
                     f"| val_heatmap_contrast={val_aux_metrics['heatmap_peak_contrast']:.6f}{best_summary}"
                 )
-            else:
+            elif should_validate:
                 print(
                     f"Epoch {epoch}/{max_epochs} | train_total={train_total:.6f} | val_smd={val_smd:.8f}{best_summary}"
                 )
+            elif aux_supervised_training:
+                print(
+                    f"Epoch {epoch}/{max_epochs} | train_aux_total={train_metrics['total']:.6f} "
+                    f"| validation=skipped"
+                )
+            elif joint_graph_aux_training:
+                print(
+                    f"Epoch {epoch}/{max_epochs} | train_joint_total={train_metrics['joint_total']:.6f} "
+                    f"| validation=skipped"
+                )
+            else:
+                print(f"Epoch {epoch}/{max_epochs} | train_total={train_total:.6f} | validation=skipped")
         optimizer_bundle.scheduler.step()
         barrier(distributed_context)
 

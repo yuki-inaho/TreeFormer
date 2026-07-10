@@ -4,9 +4,71 @@ from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
 
 from treeformer_train.config import make_legacy_config
+from train_hydra import _should_run_validation, _train_only_metrics, _validation_interval
 
 
 CONF_DIR = Path(__file__).resolve().parents[1] / "conf"
+
+
+def test_validation_interval_runs_on_boundaries_and_final_epoch():
+    assert [_should_run_validation(epoch=epoch, max_epochs=10, interval=5) for epoch in range(1, 11)] == [
+        False,
+        False,
+        False,
+        False,
+        True,
+        False,
+        False,
+        False,
+        False,
+        True,
+    ]
+    assert _should_run_validation(epoch=10, max_epochs=10, interval=3) is True
+
+
+def test_validation_interval_one_preserves_every_epoch_behavior():
+    assert all(_should_run_validation(epoch=epoch, max_epochs=4, interval=1) for epoch in range(1, 5))
+
+
+def test_validation_interval_rejects_non_positive_values():
+    class TrainConfig:
+        VAL_INTERVAL = 0
+
+    class Config:
+        TRAIN = TrainConfig()
+
+    try:
+        _validation_interval(Config())
+    except ValueError as exc:
+        assert "positive integer" in str(exc)
+    else:
+        raise AssertionError("expected invalid validation interval to fail")
+
+
+def test_joint_skipped_epoch_metrics_keep_graph_and_aux_training_values():
+    metrics = _train_only_metrics(
+        mode="joint",
+        train_metrics={
+            "joint_total": 1.0,
+            "graph_total": 2.0,
+            "graph_class": 3.0,
+            "graph_nodes": 4.0,
+            "graph_edges": 5.0,
+            "graph_boxes": 6.0,
+            "graph_cards": 7.0,
+            "aux_total": 8.0,
+            "aux_seg_total": 9.0,
+            "aux_detail_total": 10.0,
+            "aux_heatmap_total": 11.0,
+            "aux_paf_l1": 12.0,
+        },
+        lr=1e-4,
+        epoch_seconds=2.5,
+    )
+
+    assert metrics["validation/ran"] == 0.0
+    assert metrics["train/total_loss"] == 2.0
+    assert metrics["train/aux_total_loss"] == 8.0
 
 
 def test_hydra_default_config_composes_and_preserves_legacy_sections():

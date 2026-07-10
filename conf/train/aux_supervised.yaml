@@ -9,7 +9,7 @@ TRAIN:
   LR_DROP: 100
   CLIP_MAX_NORM: 20.0
   SAVE_PATH: ${oc.env:TREEFORMER_TRAIN_OUTPUT,${oc.env:TREEFORMER_ASSETS_ROOT,../TreeFormer_assets}/trained_weights_hydra_aux}
-  VAL_INTERVAL: 1
+  VAL_INTERVAL: ${oc.env:TREEFORMER_VAL_INTERVAL,1}
   SAVE_VAL: false
   LOSSES: []
   W_BBOX: 0.0
