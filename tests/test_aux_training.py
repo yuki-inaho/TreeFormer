@@ -274,3 +274,125 @@ def test_segmentation_loss_treats_mask_as_binary_foreground_target():
     losses = compute_aux_losses({"aux_maps": aux_maps}, targets, AuxLossWeights(segmentation_dice=1.0))
 
     assert torch.isfinite(losses["total"])
+
+
+def test_aux_loss_does_not_recompute_detail_target_when_provided():
+    from unittest.mock import patch
+
+    from treeformer_train.detail_targets import make_stdc_detail_boundary_target
+
+    targets = _targets(batch_size=1)
+    aux_maps = torch.randn(1, 5, 8, 10, requires_grad=True)
+    weights = AuxLossWeights(detail=0.1, detail_bce=1.0, detail_dice=1.0, heatmap=0.0, paf=0.0)
+
+    seg_target = (targets["segmentation"] > 0.5).to(dtype=targets["segmentation"].dtype)
+    precomputed_detail_target = make_stdc_detail_boundary_target(
+        seg_target,
+        threshold=weights.detail_threshold,
+        scales=weights.detail_scales,
+        support_kernel_size=weights.detail_support_kernel_size,
+    )
+
+    with patch("treeformer_train.aux_training.make_stdc_detail_boundary_target") as mock_make_detail:
+        losses = compute_aux_losses(
+            {"aux_maps": aux_maps},
+            targets,
+            weights,
+            detail_target=precomputed_detail_target,
+        )
+
+    mock_make_detail.assert_not_called()
+    assert losses["detail_total"].item() != 0.0
+
+
+def test_compute_aux_eval_metrics_computes_detail_target_only_once():
+    from unittest.mock import patch
+
+    from treeformer_train.detail_targets import make_stdc_detail_boundary_target
+
+    aux_maps = torch.randn(2, 5, 8, 10)
+    targets = _targets()
+    weights = AuxLossWeights(detail=0.1, heatmap=0.0, paf=0.0)
+
+    with patch(
+        "treeformer_train.aux_training.make_stdc_detail_boundary_target",
+        wraps=make_stdc_detail_boundary_target,
+    ) as mock_make_detail:
+        metrics = compute_aux_eval_metrics({"aux_maps": aux_maps}, targets, weights)
+
+    assert mock_make_detail.call_count == 1
+    assert "detail_iou" in metrics
+
+
+def test_aux_loss_requires_detail_target_when_fifth_channel_active_and_not_provided():
+    targets = _targets(batch_size=1)
+    aux_maps = torch.randn(1, 5, 8, 10, requires_grad=True)
+    weights = AuxLossWeights(detail=0.1, detail_bce=1.0, detail_dice=1.0, heatmap=0.0, paf=0.0)
+    seg_target = (targets["segmentation"] > 0.5).to(dtype=targets["segmentation"].dtype)
+    heatmap_target = targets["heatmap"]
+    paf_target = targets["paf"]
+    paf_mask = targets["paf_mask"].to(dtype=torch.float32)
+
+    from treeformer_train.aux_training import _compute_aux_loss_terms
+
+    try:
+        _compute_aux_loss_terms(
+            aux_maps,
+            seg_target,
+            heatmap_target,
+            paf_target,
+            paf_mask,
+            weights,
+            detail_target=None,
+        )
+    except ValueError as exc:
+        assert "detail_target" in str(exc)
+    else:
+        raise AssertionError("expected _compute_aux_loss_terms to reject a missing detail_target on a 5ch head")
+
+
+def test_compute_aux_eval_metrics_returns_only_scalar_tensors():
+    # _MetricAverager.update (aux_training.py) calls float(value.detach().item())
+    # on every value in the metrics dict. A non-scalar tensor sneaking into the
+    # dict (e.g. a raw detail_target carried through for reuse) crashes
+    # epoch_val_aux / epoch_val_aux_from_joint_loader at runtime even though this
+    # function's own unit tests pass, because no existing test exercises the
+    # averaging step on a 5ch aux head.
+    aux_maps = torch.randn(2, 5, 8, 10)
+    targets = _targets()
+    weights = AuxLossWeights(detail=0.1, heatmap=0.0, paf=0.0)
+
+    metrics = compute_aux_eval_metrics({"aux_maps": aux_maps}, targets, weights)
+
+    for key, value in metrics.items():
+        assert value.ndim == 0, f"metrics['{key}'] must be a scalar tensor, got shape {tuple(value.shape)}"
+
+
+def test_compute_aux_eval_metrics_output_survives_metric_averaging():
+    from treeformer_train.aux_training import _MetricAverager
+
+    aux_maps = torch.randn(2, 5, 8, 10)
+    targets = _targets()
+    weights = AuxLossWeights(detail=0.1, heatmap=0.0, paf=0.0)
+
+    metrics = compute_aux_eval_metrics({"aux_maps": aux_maps}, targets, weights)
+
+    averager = _MetricAverager()
+    averager.update(metrics, targets["segmentation"].shape[0])
+
+
+def test_compute_aux_losses_returns_only_scalars_for_training_metric_averaging():
+    from treeformer_train.aux_training import _MetricAverager
+
+    targets = _targets()
+    aux_maps = torch.randn(2, 5, 8, 10, requires_grad=True)
+    losses = compute_aux_losses(
+        {"aux_maps": aux_maps},
+        targets,
+        AuxLossWeights(detail=0.1, heatmap=0.0, paf=0.0),
+    )
+
+    assert all(value.ndim == 0 for value in losses.values())
+    _MetricAverager().update(losses, targets["segmentation"].shape[0])
+    losses["total"].backward()
+    assert aux_maps.grad is not None

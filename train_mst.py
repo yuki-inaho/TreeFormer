@@ -1084,7 +1084,6 @@ def build_train_val_datasets(data_config):
         cache_root = _get_data_attr(data_config, "SEG_CACHE_ROOT", None)
         train_cache_dir = os.path.join(cache_root, "train") if cache_root else None
         val_cache_dir = os.path.join(cache_root, "val") if cache_root else None
-        detail_scales = tuple(int(item) for item in _get_data_attr(data_config, "AUX_DETAIL_SCALES", (1, 2, 4)))
         seg_resize_policy = str(_get_data_attr(data_config, "SEG_RESIZE_POLICY", "legacy_half"))
         aux_target_mode = str(_get_data_attr(data_config, "AUX_TARGET_MODE", "seg_only"))
         heatmap_sigma = float(_get_data_attr(data_config, "AUX_HEATMAP_SIGMA", 3.0))
@@ -1096,9 +1095,6 @@ def build_train_val_datasets(data_config):
             max_size=data_config.MAX_SIZE,
             cache_mode=cache_mode,
             cache_dir=train_cache_dir,
-            detail_threshold=float(_get_data_attr(data_config, "AUX_DETAIL_THRESHOLD", 0.1)),
-            detail_scales=detail_scales,
-            detail_support_kernel_size=int(_get_data_attr(data_config, "AUX_DETAIL_SUPPORT_KERNEL_SIZE", 3)),
             resize_policy=seg_resize_policy,
             aux_target_mode=aux_target_mode,
             heatmap_sigma=heatmap_sigma,
@@ -1113,9 +1109,6 @@ def build_train_val_datasets(data_config):
             max_size=data_config.MAX_SIZE,
             cache_mode=cache_mode,
             cache_dir=val_cache_dir,
-            detail_threshold=float(_get_data_attr(data_config, "AUX_DETAIL_THRESHOLD", 0.1)),
-            detail_scales=detail_scales,
-            detail_support_kernel_size=int(_get_data_attr(data_config, "AUX_DETAIL_SUPPORT_KERNEL_SIZE", 3)),
             resize_policy=seg_resize_policy,
             aux_target_mode=aux_target_mode,
             heatmap_sigma=heatmap_sigma,

@@ -176,6 +176,29 @@ def test_fast_seg_dataset_preserves_virtual_root_metadata(tmp_path: Path):
     assert torch.equal(metadata["component_id"], torch.tensor([0, 0]))
 
 
+def test_fast_seg_cache_omits_unused_detail_boundary_payload(tmp_path: Path):
+    split_root = _write_split(tmp_path, "train", count=2)
+    cache_dir = tmp_path / "cache" / "train"
+    build_fast_seg_cache(split_root=split_root, cache_dir=cache_dir, max_size=64)
+
+    payload = torch.load(next(cache_dir.glob("*.pt")), map_location="cpu", weights_only=False)
+    assert payload["cache_format_version"] == 2
+    assert "detail_boundary" not in payload
+
+    none_dataset = FastSegSupervisedDataset(split_root, max_size=64, cache_mode="none")
+    disk_dataset = FastSegSupervisedDataset(split_root, max_size=64, cache_mode="disk", cache_dir=cache_dir)
+    none_item = none_dataset[0]
+    disk_item = disk_dataset[0]
+
+    # The __getitem__ contract (and therefore custom_collate_fn's 9/10-tuple
+    # branching) stays unchanged while detail target construction belongs only
+    # to the loss/metric layer.
+    assert len(none_item) == 9
+    assert len(disk_item) == 9
+    batch = custom_collate_fn([none_dataset[0], none_dataset[1]])[0]
+    assert len(batch[0]) == 2
+
+
 def test_build_train_val_datasets_can_select_fast_seg_loader(tmp_path: Path):
     _write_split(tmp_path, "train", count=2)
     _write_split(tmp_path, "val", count=1)

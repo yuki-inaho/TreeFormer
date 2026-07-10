@@ -279,15 +279,11 @@ def build_aux_panel_dataset(
     if use_fast_seg:
         from treeformer_train.fast_seg_dataset import FastSegSupervisedDataset
 
-        detail_scales = checkpoint_data_value(checkpoint, "AUX_DETAIL_SCALES", (1, 2, 4))
         return (
             FastSegSupervisedDataset(
                 split_root,
                 max_size=max_size,
                 cache_mode="none",
-                detail_threshold=float(checkpoint_data_value(checkpoint, "AUX_DETAIL_THRESHOLD", 0.1)),
-                detail_scales=tuple(int(item) for item in detail_scales),
-                detail_support_kernel_size=int(checkpoint_data_value(checkpoint, "AUX_DETAIL_SUPPORT_KERNEL_SIZE", 3)),
                 resize_policy=str(checkpoint_data_value(checkpoint, "SEG_RESIZE_POLICY", "legacy_half")),
                 aux_target_mode=str(checkpoint_data_value(checkpoint, "AUX_TARGET_MODE", "seg_only")),
                 heatmap_sigma=float(checkpoint_data_value(checkpoint, "AUX_HEATMAP_SIGMA", 3.0)),

@@ -14,11 +14,11 @@ import torch
 from torch.utils.data import Dataset
 
 from .aux_map_targets import AuxMapTargetConfig, make_aux_map_target_config, make_aux_map_targets
-from .detail_targets import make_stdc_detail_boundary_target
 from .virtual_root import load_forest_metadata
 
 
 IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp")
+CACHE_FORMAT_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -148,14 +148,28 @@ def discover_fast_seg_samples(split_root: str | Path) -> list[FastSegSample]:
     return samples
 
 
-def _cache_key(sample: FastSegSample, *, max_size: int, detail_config: dict[str, Any]) -> str:
+def _cache_config(*, resize_policy: str, aux_target_config: AuxMapTargetConfig) -> dict[str, Any]:
+    return {
+        "format_version": CACHE_FORMAT_VERSION,
+        "resize_policy": str(resize_policy).lower(),
+        "aux_target": {
+            "mode": aux_target_config.mode,
+            "heatmap_sigma": aux_target_config.heatmap_sigma,
+            "heatmap_cutoff": aux_target_config.heatmap_cutoff,
+            "paf_line_thickness": aux_target_config.paf_line_thickness,
+            "paf_mask_thickness": aux_target_config.paf_mask_thickness,
+        },
+    }
+
+
+def _cache_key(sample: FastSegSample, *, max_size: int, cache_config: dict[str, Any]) -> str:
     payload = {
         "sample_id": sample.sample_id,
         "data_name": sample.data_path.name,
         "image_name": sample.image_path.name,
         "mask_name": sample.mask_path.name,
         "max_size": int(max_size),
-        "detail": detail_config,
+        "cache": cache_config,
     }
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()[:24]
 
@@ -165,9 +179,6 @@ def build_fast_seg_cache(
     split_root: str | Path,
     cache_dir: str | Path,
     max_size: int,
-    detail_threshold: float = 0.1,
-    detail_scales: tuple[int, ...] = (1, 2, 4),
-    detail_support_kernel_size: int = 3,
     resize_policy: str = "legacy_half",
     aux_target_mode: str = "seg_only",
     heatmap_sigma: float = 3.0,
@@ -180,13 +191,6 @@ def build_fast_seg_cache(
     samples = discover_fast_seg_samples(split_root)
     cache_dir = Path(cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
-    detail_config = {
-        "threshold": float(detail_threshold),
-        "scales": [int(item) for item in detail_scales],
-        "support_kernel_size": int(detail_support_kernel_size),
-    }
-    if str(resize_policy).lower() != "legacy_half":
-        detail_config["resize_policy"] = str(resize_policy).lower()
     aux_target_config = make_aux_map_target_config(
         mode=aux_target_mode,
         heatmap_sigma=heatmap_sigma,
@@ -194,18 +198,11 @@ def build_fast_seg_cache(
         paf_line_thickness=paf_line_thickness,
         paf_mask_thickness=paf_mask_thickness,
     )
-    if aux_target_config.mode != "seg_only":
-        detail_config["aux_target"] = {
-            "mode": aux_target_config.mode,
-            "heatmap_sigma": aux_target_config.heatmap_sigma,
-            "heatmap_cutoff": aux_target_config.heatmap_cutoff,
-            "paf_line_thickness": aux_target_config.paf_line_thickness,
-            "paf_mask_thickness": aux_target_config.paf_mask_thickness,
-        }
+    cache_config = _cache_config(resize_policy=resize_policy, aux_target_config=aux_target_config)
     written = 0
     skipped = 0
     for sample in samples:
-        cache_path = cache_dir / f"{_cache_key(sample, max_size=max_size, detail_config=detail_config)}.pt"
+        cache_path = cache_dir / f"{_cache_key(sample, max_size=max_size, cache_config=cache_config)}.pt"
         if cache_path.exists() and not overwrite:
             skipped += 1
             continue
@@ -214,16 +211,6 @@ def build_fast_seg_cache(
             sample.mask_path,
             max_size,
             resize_policy=resize_policy,
-        )
-        detail = (
-            make_stdc_detail_boundary_target(
-                segmentation,
-                threshold=detail_threshold,
-                scales=detail_scales,
-                support_kernel_size=detail_support_kernel_size,
-            )
-            .squeeze(0)
-            .squeeze(0)
         )
         nodes, edges, metadata = _load_graph_annotation(
             sample.data_path,
@@ -237,16 +224,16 @@ def build_fast_seg_cache(
         )
         payload = {
             "sample_id": sample.sample_id,
+            "cache_format_version": CACHE_FORMAT_VERSION,
+            "cache_config": cache_config,
             "image": image,
             "segmentation": segmentation,
-            "detail_boundary": detail.contiguous(),
             "nodes": nodes,
             "edges": edges,
             "paf": pafs,
             "paf_mask": paf_mask,
             "heatmap": heatmap,
             "forest_metadata": metadata,
-            "detail_config": detail_config,
             "max_size": int(max_size),
         }
         tmp_path = cache_path.with_suffix(".pt.tmp")
@@ -266,9 +253,6 @@ class FastSegSupervisedDataset(Dataset):
         max_size: int,
         cache_mode: str = "none",
         cache_dir: str | Path | None = None,
-        detail_threshold: float = 0.1,
-        detail_scales: tuple[int, ...] = (1, 2, 4),
-        detail_support_kernel_size: int = 3,
         resize_policy: str = "legacy_half",
         aux_target_mode: str = "seg_only",
         heatmap_sigma: float = 3.0,
@@ -287,11 +271,8 @@ class FastSegSupervisedDataset(Dataset):
         self.cache_dir = Path(cache_dir) if cache_dir is not None else None
         if self.cache_mode == "disk" and self.cache_dir is None:
             raise ValueError("cache_dir is required when cache_mode='disk'")
-        self.detail_threshold = float(detail_threshold)
         self.return_forest_metadata = bool(return_forest_metadata)
         self.strict_virtual_root_metadata = bool(strict_virtual_root_metadata)
-        self.detail_scales = tuple(int(item) for item in detail_scales)
-        self.detail_support_kernel_size = int(detail_support_kernel_size)
         self.resize_policy = str(resize_policy).lower()
         if self.resize_policy not in {"legacy_half", "full"}:
             raise ValueError(f"resize_policy must be one of ['legacy_half', 'full'], got {resize_policy!r}")
@@ -302,21 +283,7 @@ class FastSegSupervisedDataset(Dataset):
             paf_line_thickness=paf_line_thickness,
             paf_mask_thickness=paf_mask_thickness,
         )
-        self.detail_config = {
-            "threshold": self.detail_threshold,
-            "scales": list(self.detail_scales),
-            "support_kernel_size": self.detail_support_kernel_size,
-        }
-        if self.resize_policy != "legacy_half":
-            self.detail_config["resize_policy"] = self.resize_policy
-        if self.aux_target_config.mode != "seg_only":
-            self.detail_config["aux_target"] = {
-                "mode": self.aux_target_config.mode,
-                "heatmap_sigma": self.aux_target_config.heatmap_sigma,
-                "heatmap_cutoff": self.aux_target_config.heatmap_cutoff,
-                "paf_line_thickness": self.aux_target_config.paf_line_thickness,
-                "paf_mask_thickness": self.aux_target_config.paf_mask_thickness,
-            }
+        self.cache_config = _cache_config(resize_policy=self.resize_policy, aux_target_config=self.aux_target_config)
         self._memory_cache: dict[int, tuple[Any, ...]] = {}
 
     def __len__(self) -> int:
@@ -325,13 +292,12 @@ class FastSegSupervisedDataset(Dataset):
     def _cache_path(self, sample: FastSegSample) -> Path:
         if self.cache_dir is None:
             raise ValueError("cache_dir is not configured")
-        return self.cache_dir / f"{_cache_key(sample, max_size=self.max_size, detail_config=self.detail_config)}.pt"
+        return self.cache_dir / f"{_cache_key(sample, max_size=self.max_size, cache_config=self.cache_config)}.pt"
 
     def _load_from_disk_cache(
         self,
         sample: FastSegSample,
     ) -> tuple[
-        torch.Tensor,
         torch.Tensor,
         torch.Tensor,
         torch.Tensor,
@@ -348,10 +314,14 @@ class FastSegSupervisedDataset(Dataset):
                 "Run generate_fast_seg_cache.py before using DATA.SEG_CACHE_MODE=disk."
             )
         payload = torch.load(cache_path, map_location="cpu", weights_only=False)
+        if payload.get("cache_format_version") != CACHE_FORMAT_VERSION:
+            raise ValueError(
+                f"unsupported fast segmentation cache format in {cache_path}; "
+                "regenerate the cache with generate_fast_seg_cache.py."
+            )
         return (
             payload["image"].float(),
             payload["segmentation"].float(),
-            payload["detail_boundary"].float(),
             payload["nodes"].float(),
             payload["edges"].long(),
             payload.get("paf", None).float() if payload.get("paf", None) is not None else None,
@@ -363,39 +333,32 @@ class FastSegSupervisedDataset(Dataset):
 
     def _build_sample(
         self, sample: FastSegSample
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, dict[str, Any]]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, dict[str, Any]]:
         image, segmentation = _prepare_image_and_mask(
             sample.image_path,
             sample.mask_path,
             self.max_size,
             resize_policy=self.resize_policy,
         )
-        detail = (
-            make_stdc_detail_boundary_target(
-                segmentation,
-                threshold=self.detail_threshold,
-                scales=self.detail_scales,
-                support_kernel_size=self.detail_support_kernel_size,
-            )
-            .squeeze(0)
-            .squeeze(0)
-        )
+        # No detail boundary target is computed here: __getitem__ never places it
+        # in the returned tuple, so computing it would be dead weight (see
+        # _load_from_disk_cache for the same note).
         nodes, edges, metadata = _load_graph_annotation(
             sample.data_path,
             strict_virtual_root_metadata=self.strict_virtual_root_metadata,
         )
-        return image, segmentation, detail.contiguous(), nodes, edges, metadata
+        return image, segmentation, nodes, edges, metadata
 
     def __getitem__(self, index: int) -> tuple[Any, ...]:
         if index in self._memory_cache:
             return self._memory_cache[index]
         sample = self.samples[index]
         if self.cache_mode == "disk":
-            image, segmentation, detail, nodes, edges, cached_pafs, cached_paf_mask, cached_heatmap, metadata = (
+            image, segmentation, nodes, edges, cached_pafs, cached_paf_mask, cached_heatmap, metadata = (
                 self._load_from_disk_cache(sample)
             )
         else:
-            image, segmentation, detail, nodes, edges, metadata = self._build_sample(sample)
+            image, segmentation, nodes, edges, metadata = self._build_sample(sample)
             cached_pafs = None
             cached_paf_mask = None
             cached_heatmap = None
@@ -434,10 +397,6 @@ class FastSegSupervisedDataset(Dataset):
         return item
 
 
-def _parse_scales(value: str) -> tuple[int, ...]:
-    return tuple(int(item.strip()) for item in value.split(",") if item.strip())
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate repo-external cache files for FastSegSupervisedDataset")
     parser.add_argument(
@@ -446,9 +405,6 @@ def main() -> None:
     parser.add_argument("--cache-root", required=True, help="Directory where cache files will be written")
     parser.add_argument("--splits", nargs="+", default=["train", "val"], help="Split names to cache")
     parser.add_argument("--max-size", type=int, default=128, help="Model input max size")
-    parser.add_argument("--detail-threshold", type=float, default=0.1)
-    parser.add_argument("--detail-scales", default="1,2,4")
-    parser.add_argument("--detail-support-kernel-size", type=int, default=3)
     parser.add_argument("--resize-policy", choices=["legacy_half", "full"], default="legacy_half")
     parser.add_argument("--aux-target-mode", default="seg_only")
     parser.add_argument("--heatmap-sigma", type=float, default=3.0)
@@ -461,16 +417,12 @@ def main() -> None:
 
     dataset_root = Path(args.dataset_root)
     cache_root = Path(args.cache_root)
-    scales = _parse_scales(str(args.detail_scales))
     totals = {"samples": 0, "written": 0, "skipped": 0}
     for split in args.splits:
         stats = build_fast_seg_cache(
             split_root=dataset_root / split,
             cache_dir=cache_root / split,
             max_size=int(args.max_size),
-            detail_threshold=float(args.detail_threshold),
-            detail_scales=scales,
-            detail_support_kernel_size=int(args.detail_support_kernel_size),
             resize_policy=str(args.resize_policy),
             aux_target_mode=str(args.aux_target_mode),
             heatmap_sigma=float(args.heatmap_sigma),

@@ -44,7 +44,7 @@ class AuxLossWeights:
 
 
 AuxLossCore = Callable[
-    [torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor],
+    [torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, "torch.Tensor | None"],
     dict[str, torch.Tensor],
 ]
 
@@ -287,6 +287,7 @@ def _compute_aux_loss_terms(
     paf_target: torch.Tensor,
     paf_mask: torch.Tensor,
     weights: AuxLossWeights,
+    detail_target: torch.Tensor | None = None,
 ) -> dict[str, torch.Tensor]:
     seg_logits = _resize_like(aux_maps[:, 0:1], seg_target)
     heatmap_logits = _resize_like(aux_maps[:, 1:2], heatmap_target)
@@ -311,12 +312,13 @@ def _compute_aux_loss_terms(
     detail_dice = zero
     detail_total = zero
     if aux_maps.shape[1] >= 5:
-        detail_target = make_stdc_detail_boundary_target(
-            seg_target,
-            threshold=weights.detail_threshold,
-            scales=weights.detail_scales,
-            support_kernel_size=weights.detail_support_kernel_size,
-        )
+        if detail_target is None:
+            raise ValueError(
+                "detail_target must be provided when aux_maps has a 5th (detail boundary) "
+                "channel active. Compute it once from the segmentation target at the call "
+                "site (see compute_aux_losses) and pass it in; this function does not "
+                "recompute it implicitly."
+            )
         detail_logits = _resize_like(aux_maps[:, 4:5], detail_target)
         detail_bce = F.binary_cross_entropy_with_logits(detail_logits, detail_target)
         detail_dice = binary_dice_loss_with_logits(detail_logits, detail_target)
@@ -352,6 +354,12 @@ def _compute_aux_loss_terms(
         + weights.heatmap * heatmap_total
         + weights.paf * paf_l1
     )
+    # Deliberately scalar-only: _MetricAverager.update() calls
+    # float(value.detach().item()) on every value in this dict (directly, or via
+    # compute_aux_eval_metrics' losses dict below). Do not add non-scalar tensors
+    # (e.g. detail_target) here -- see compute_aux_eval_metrics for how the
+    # single computed detail_target is threaded through and reused without ever
+    # entering a metrics dict.
     return {
         "total": total,
         "seg_total": seg_total,
@@ -376,8 +384,11 @@ def make_aux_loss_core(weights: AuxLossWeights) -> AuxLossCore:
         heatmap_target: torch.Tensor,
         paf_target: torch.Tensor,
         paf_mask: torch.Tensor,
+        detail_target: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
-        return _compute_aux_loss_terms(aux_maps, seg_target, heatmap_target, paf_target, paf_mask, weights)
+        return _compute_aux_loss_terms(
+            aux_maps, seg_target, heatmap_target, paf_target, paf_mask, weights, detail_target
+        )
 
     return _core
 
@@ -391,8 +402,14 @@ class AuxLossComputer:
         if self.core is None:
             self.core = make_aux_loss_core(self.weights)
 
-    def __call__(self, output: dict[str, torch.Tensor], targets: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-        return compute_aux_losses(output, targets, self.weights, loss_core=self.core)
+    def __call__(
+        self,
+        output: dict[str, torch.Tensor],
+        targets: dict[str, torch.Tensor],
+        *,
+        detail_target: torch.Tensor | None = None,
+    ) -> dict[str, torch.Tensor]:
+        return compute_aux_losses(output, targets, self.weights, loss_core=self.core, detail_target=detail_target)
 
 
 def build_aux_loss_computer(
@@ -413,6 +430,7 @@ def compute_aux_losses(
     weights: AuxLossWeights,
     *,
     loss_core: AuxLossCore | None = None,
+    detail_target: torch.Tensor | None = None,
 ) -> dict[str, torch.Tensor]:
     aux_maps = output.get("aux_maps")
     if aux_maps is None:
@@ -426,9 +444,22 @@ def compute_aux_losses(
     heatmap_target = targets["heatmap"]
     paf_target = targets["paf"]
     paf_mask = targets["paf_mask"].to(dtype=torch.float32)
+
+    # Build the detail target only when the caller has not already shared one.
+    # compute_aux_eval_metrics creates it first so its loss and metric paths reuse
+    # a single tensor. _compute_aux_loss_terms itself always requires an explicit
+    # value and refuses to recompute it.
+    if aux_maps.shape[1] >= 5 and detail_target is None:
+        detail_target = make_stdc_detail_boundary_target(
+            seg_target,
+            threshold=weights.detail_threshold,
+            scales=weights.detail_scales,
+            support_kernel_size=weights.detail_support_kernel_size,
+        )
+
     if loss_core is not None:
-        return loss_core(aux_maps, seg_target, heatmap_target, paf_target, paf_mask)
-    return _compute_aux_loss_terms(aux_maps, seg_target, heatmap_target, paf_target, paf_mask, weights)
+        return loss_core(aux_maps, seg_target, heatmap_target, paf_target, paf_mask, detail_target)
+    return _compute_aux_loss_terms(aux_maps, seg_target, heatmap_target, paf_target, paf_mask, weights, detail_target)
 
 
 def compute_aux_eval_metrics(
@@ -437,10 +468,24 @@ def compute_aux_eval_metrics(
     weights: AuxLossWeights,
     *,
     loss_core: AuxLossCore | None = None,
+    detail_target: torch.Tensor | None = None,
 ) -> dict[str, torch.Tensor]:
-    losses = compute_aux_losses(output, targets, weights, loss_core=loss_core)
     aux_maps = output["aux_maps"]
     seg_target = _prepare_binary_segmentation_target(targets["segmentation"])
+
+    # Compute detail_target exactly once here (or use the caller-supplied one)
+    # and pass it into compute_aux_losses so it does not compute its own copy.
+    # The result is reused below for this function's own detail metrics instead
+    # of being read back out of the losses dict, which must stay scalar-only.
+    if aux_maps.shape[1] >= 5 and detail_target is None:
+        detail_target = make_stdc_detail_boundary_target(
+            seg_target,
+            threshold=weights.detail_threshold,
+            scales=weights.detail_scales,
+            support_kernel_size=weights.detail_support_kernel_size,
+        )
+
+    losses = compute_aux_losses(output, targets, weights, loss_core=loss_core, detail_target=detail_target)
     heatmap_target = targets["heatmap"]
     paf_target = targets["paf"]
     paf_mask = targets["paf_mask"].to(dtype=torch.float32)
@@ -482,12 +527,15 @@ def compute_aux_eval_metrics(
     paf_masked_l1 = (torch.abs(torch.tanh(paf_pred) - paf_target) * active_paf_mask).sum()
     paf_masked_l1 = paf_masked_l1 / (active_paf_mask.sum().clamp_min(1.0) * paf_target.shape[1])
     if aux_maps.shape[1] >= 5:
-        detail_target = make_stdc_detail_boundary_target(
-            seg_target,
-            threshold=weights.detail_threshold,
-            scales=weights.detail_scales,
-            support_kernel_size=weights.detail_support_kernel_size,
-        )
+        # detail_target was computed once above (or supplied by the caller) and
+        # passed into compute_aux_losses; reuse that same local variable here
+        # instead of recomputing it or reading it back out of the losses dict.
+        if detail_target is None:
+            raise ValueError(
+                "detail_target must have been computed above when aux_maps has a 5th "
+                "(detail boundary) channel active; this indicates a logic error in the "
+                "computation guard, not a reason to silently recompute it here"
+            )
         detail_logits = _resize_like(aux_maps[:, 4:5], detail_target)
         detail_probabilities = torch.sigmoid(detail_logits)
         detail_pred = detail_probabilities > weights.detail_eval_threshold
