@@ -450,6 +450,14 @@ def test_native_offset_targets_and_nms_decode_preserve_subcell_coordinates():
     assert decoded[0].shape == (1, 3)
     assert torch.allclose(decoded[0][0, :2], torch.tensor([3.0, 2.0]))
 
+    rejected = decode_native_heatmap_peaks(
+        heatmap_logits,
+        offset_logits,
+        threshold=0.25,
+        valid_mask=torch.zeros_like(heatmap_logits, dtype=torch.bool),
+    )
+    assert rejected[0].shape == (0, 3)
+
 
 def test_native_offset_loss_uses_node_coordinates_without_changing_collate_targets():
     targets = _targets(batch_size=1, height=8, width=12)

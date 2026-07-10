@@ -560,7 +560,7 @@ just cache-private-native-heatmap-stride4
 
 Then compose or train with `train=seg_heatmap_paf +ablation=heatmap_native_stride4`. The panel renderer upsamples the native target and prediction only for display. The 9/10-tuple legacy collate contract remains unchanged.
 
-This first comparison intentionally has no NMS or offset loss. If its panel still produces ridge-like peaks, use `+ablation=heatmap_native_stride4_offset`. It adds a direct decoder `2x1` offset projection, learns nearest-cell sub-pixel offsets from existing node coordinates, and applies 3x3 NMS plus those offsets only during inference. The heatmap head itself remains a direct decoder `1x1` projection.
+This first comparison intentionally has no NMS or offset loss. If its panel still produces ridge-like peaks, use `+ablation=heatmap_native_stride4_offset`. It adds a direct decoder `2x1` offset projection, learns nearest-cell sub-pixel offsets from existing node coordinates, and applies 3x3 NMS plus those offsets only during inference. NMS candidates are restricted to predicted segmentation foreground. The heatmap head itself remains a direct decoder `1x1` projection.
 
 The offset profile reuses the same stride-4 cache because offsets are derived from the existing per-sample node coordinates at loss time:
 

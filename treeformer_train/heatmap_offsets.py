@@ -63,12 +63,14 @@ def decode_native_heatmap_peaks(
     offset_logits: torch.Tensor | None,
     *,
     threshold: float,
+    valid_mask: torch.Tensor | None = None,
 ) -> list[torch.Tensor]:
     """Apply 3x3 NMS and optional sub-cell offsets on native heatmap logits.
 
     Returned tensors are shaped ``[K, 3]`` with ``x, y, confidence`` in native
-    heatmap-grid coordinates.  The caller decides whether to scale them to an
-    input image for rendering or graph post-processing.
+    heatmap-grid coordinates.  ``valid_mask`` can restrict candidates to a
+    predicted segmentation foreground. The caller decides whether to scale
+    coordinates to an input image for rendering or graph post-processing.
     """
 
     if heatmap_logits.ndim != 4 or heatmap_logits.shape[1] != 1:
@@ -87,6 +89,13 @@ def decode_native_heatmap_peaks(
     probabilities = torch.sigmoid(heatmap_logits)
     local_maxima = probabilities == F.max_pool2d(probabilities, kernel_size=3, stride=1, padding=1)
     keep = local_maxima & (probabilities >= float(threshold))
+    if valid_mask is not None:
+        if valid_mask.shape != heatmap_logits.shape:
+            raise ValueError(
+                "valid_mask must match heatmap logits shape, "
+                f"got {tuple(valid_mask.shape)} and {tuple(heatmap_logits.shape)}"
+            )
+        keep = keep & valid_mask.to(dtype=torch.bool)
     offsets = bounded_offset_prediction(offset_logits) if offset_logits is not None else None
     decoded: list[torch.Tensor] = []
     for batch_index in range(probabilities.shape[0]):

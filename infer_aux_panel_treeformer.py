@@ -452,10 +452,18 @@ def predict_aux_maps(
     if aux_maps.shape[0] >= 5:
         prediction["detail_boundary"] = torch.sigmoid(aux_maps[4]).clamp(0.0, 1.0)
     if include_node_peaks and output.get("aux_heatmap_native") is not None:
+        native_size = tuple(int(item) for item in output["aux_heatmap_native"].shape[-2:])
+        segmentation_native = F.interpolate(
+            prediction["segmentation"].unsqueeze(0).unsqueeze(0),
+            size=native_size,
+            mode="bilinear",
+            align_corners=False,
+        )
         decoded = decode_native_heatmap_peaks(
             output["aux_heatmap_native"].detach().cpu(),
             native_offsets.detach().cpu() if native_offsets is not None else None,
             threshold=peak_threshold,
+            valid_mask=segmentation_native >= 0.5,
         )[0]
         if decoded.shape[0] > 0:
             native_height, native_width = output["aux_heatmap_native"].shape[-2:]
@@ -528,7 +536,9 @@ def make_aux_panel(
             ]
         )
     if show_node_peaks and "node_peaks" in prediction:
-        panels.append(add_label(overlay_node_peaks(input_image, prediction["node_peaks"]), "Pred NMS node peaks"))
+        panels.append(
+            add_label(overlay_node_peaks(input_image, prediction["node_peaks"]), "Pred segmentation-gated NMS nodes")
+        )
     if show_paf:
         gt_paf_magnitude = torch.linalg.vector_norm(gt_paf_display, dim=0).clamp(0.0, 1.0)
         pred_paf_magnitude = torch.linalg.vector_norm(pred_paf_display, dim=0).clamp(0.0, 1.0)
