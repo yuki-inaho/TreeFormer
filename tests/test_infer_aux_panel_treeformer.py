@@ -16,6 +16,7 @@ from infer_aux_panel_treeformer import (
     mask_scalar_map_by_segmentation,
     paf_to_rgb,
     overlay_node_peaks,
+    predict_aux_maps,
     resize_scalar_map,
     unpack_aux_panel_sample,
     write_aux_summary_json,
@@ -80,6 +81,35 @@ def test_aux_visualization_helpers_mask_maps_by_segmentation_confidence():
     assert mask_paf_by_segmentation(paf, empty_segmentation).max().item() == 0.0
     assert mask_scalar_map_by_segmentation(heatmap, foreground_segmentation).sum().item() == 16.0
     assert mask_paf_by_segmentation(paf, foreground_segmentation).sum().item() == 32.0
+
+
+def test_native_nms_nodes_use_predicted_segmentation_without_gt_input():
+    class Model(torch.nn.Module):
+        def forward(self, _images):
+            aux_maps = torch.full((1, 4, 8, 8), -10.0)
+            aux_maps[:, 0, :2, :2] = 10.0
+            heatmap = torch.full((1, 1, 4, 4), -10.0)
+            heatmap[:, :, 0, 0] = 10.0
+            heatmap[:, :, 3, 3] = 10.0
+            offsets = torch.zeros((1, 2, 4, 4))
+            return None, {
+                "aux_maps": aux_maps,
+                "aux_heatmap_native": heatmap,
+                "aux_heatmap_offset_native": offsets,
+            }
+
+    prediction = predict_aux_maps(
+        Model(),
+        torch.zeros(3, 8, 8),
+        torch.device("cpu"),
+        (8, 8),
+        include_node_peaks=True,
+    )
+
+    # No GT segmentation is accepted by predict_aux_maps. The lower-right
+    # heatmap peak is rejected exclusively by the model's own segmentation.
+    assert prediction["node_peaks"].shape == (1, 3)
+    assert torch.allclose(prediction["node_peaks"][0, :2], torch.tensor([0.0, 0.0]))
 
 
 def test_make_aux_panel_and_summary_json(tmp_path: Path):
