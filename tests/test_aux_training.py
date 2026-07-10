@@ -12,6 +12,7 @@ from treeformer_train.aux_training import (
     compute_aux_eval_metrics,
     compute_aux_losses,
 )
+from treeformer_train.heatmap_offsets import decode_native_heatmap_peaks, make_native_offset_targets
 
 
 class Config:
@@ -88,6 +89,7 @@ def test_compute_aux_losses_backpropagates_with_resized_maps():
         "heatmap_coord",
         "heatmap_coord_var",
         "heatmap_peak",
+        "heatmap_offset",
         "paf_total",
         "paf_l1",
         "paf_angular",
@@ -426,6 +428,60 @@ def test_native_heatmap_target_rejects_legacy_full_resolution_head():
         assert "aux_heatmap_native" in str(exc)
     else:
         raise AssertionError("expected native target supervision to require native heatmap logits")
+
+
+def test_native_offset_targets_and_nms_decode_preserve_subcell_coordinates():
+    offsets, valid = make_native_offset_targets(
+        [torch.tensor([[0.6, 0.5]], dtype=torch.float32)],
+        target_size=(4, 6),
+        device=torch.device("cpu"),
+        dtype=torch.float32,
+    )
+
+    assert valid.sum().item() == 1
+    assert torch.allclose(offsets[0, :, 2, 3], torch.tensor([0.0, -0.5]))
+
+    heatmap_logits = torch.full((1, 1, 4, 6), -12.0)
+    heatmap_logits[0, 0, 2, 3] = 12.0
+    offset_logits = torch.zeros((1, 2, 4, 6))
+    decoded = decode_native_heatmap_peaks(heatmap_logits, offset_logits, threshold=0.25)
+
+    assert len(decoded) == 1
+    assert decoded[0].shape == (1, 3)
+    assert torch.allclose(decoded[0][0, :2], torch.tensor([3.0, 2.0]))
+
+
+def test_native_offset_loss_uses_node_coordinates_without_changing_collate_targets():
+    targets = _targets(batch_size=1, height=8, width=12)
+    targets["heatmap"] = torch.zeros(1, 1, 2, 3)
+    targets["nodes"] = [torch.tensor([[0.5, 0.5]], dtype=torch.float32)]
+    aux_maps = torch.zeros(1, 4, 8, 12, requires_grad=True)
+    native_logits = torch.zeros(1, 1, 2, 3, requires_grad=True)
+    offset_logits = torch.zeros(1, 2, 2, 3, requires_grad=True)
+    weights = AuxLossWeights(
+        segmentation=0.0,
+        heatmap=1.0,
+        heatmap_mse=0.0,
+        heatmap_focal=0.0,
+        heatmap_ridge=0.0,
+        heatmap_offset=1.0,
+        paf=0.0,
+    )
+
+    losses = compute_aux_losses(
+        {
+            "aux_maps": aux_maps,
+            "aux_heatmap_native": native_logits,
+            "aux_heatmap_offset_native": offset_logits,
+        },
+        targets,
+        weights,
+    )
+    losses["total"].backward()
+
+    assert losses["heatmap_offset"].item() > 0.0
+    assert offset_logits.grad is not None
+    assert torch.count_nonzero(offset_logits.grad) > 0
 
 
 def test_compute_aux_eval_metrics_returns_only_scalar_tensors():

@@ -19,7 +19,7 @@ from typing import Any
 import numpy as np
 import torch
 import torch.nn.functional as F
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from infer_panel_treeformer import (
     add_label,
@@ -29,6 +29,7 @@ from infer_panel_treeformer import (
     select_state_dict,
 )
 from treeformer_train.detail_targets import make_stdc_detail_boundary_target
+from treeformer_train.heatmap_offsets import decode_native_heatmap_peaks
 
 
 def _nested_mapping_get(mapping: Mapping[str, Any], path: tuple[str, ...], default: Any = None) -> Any:
@@ -138,6 +139,21 @@ def overlay_map(
     color_array = np.asarray(color, dtype=np.float32).reshape(1, 1, 3)
     mixed = base * (1.0 - values[..., None] * alpha) + color_array * (values[..., None] * alpha)
     return Image.fromarray(np.clip(mixed, 0.0, 255.0).astype(np.uint8), mode="RGB")
+
+
+def overlay_node_peaks(image: Image.Image, peaks: torch.Tensor, *, radius: int = 4) -> Image.Image:
+    """Draw NMS-decoded node locations over an RGB image."""
+
+    canvas = image.convert("RGB").copy()
+    draw = ImageDraw.Draw(canvas)
+    for x, y, _confidence in peaks.detach().cpu().float().tolist():
+        draw.ellipse(
+            (x - radius, y - radius, x + radius, y + radius),
+            fill=(255, 215, 0),
+            outline=(20, 20, 20),
+            width=1,
+        )
+    return canvas
 
 
 def paf_to_rgb(
@@ -410,7 +426,13 @@ def unpack_aux_panel_sample(
 
 
 def predict_aux_maps(
-    model: torch.nn.Module, image: torch.Tensor, device: torch.device, target_size: tuple[int, int]
+    model: torch.nn.Module,
+    image: torch.Tensor,
+    device: torch.device,
+    target_size: tuple[int, int],
+    *,
+    peak_threshold: float = 0.25,
+    include_node_peaks: bool = False,
 ) -> dict[str, torch.Tensor]:
     with torch.inference_mode():
         _, output = model([image.to(device)])
@@ -419,6 +441,7 @@ def predict_aux_maps(
             raise KeyError("model output does not contain aux_maps")
         aux_maps = resize_aux_maps(aux_maps.detach().cpu(), target_size)[0]
         native_heatmap = output.get("aux_heatmap_native")
+        native_offsets = output.get("aux_heatmap_offset_native")
         if native_heatmap is not None:
             native_heatmap = resize_scalar_map(native_heatmap.detach().cpu(), target_size)
     prediction = {
@@ -428,6 +451,18 @@ def predict_aux_maps(
     }
     if aux_maps.shape[0] >= 5:
         prediction["detail_boundary"] = torch.sigmoid(aux_maps[4]).clamp(0.0, 1.0)
+    if include_node_peaks and output.get("aux_heatmap_native") is not None:
+        decoded = decode_native_heatmap_peaks(
+            output["aux_heatmap_native"].detach().cpu(),
+            native_offsets.detach().cpu() if native_offsets is not None else None,
+            threshold=peak_threshold,
+        )[0]
+        if decoded.shape[0] > 0:
+            native_height, native_width = output["aux_heatmap_native"].shape[-2:]
+            decoded = decoded.clone()
+            decoded[:, 0] *= max(target_size[1] - 1, 1) / max(native_width - 1, 1)
+            decoded[:, 1] *= max(target_size[0] - 1, 1) / max(native_height - 1, 1)
+        prediction["node_peaks"] = decoded
     return prediction
 
 
@@ -444,6 +479,7 @@ def make_aux_panel(
     show_derived_detail: bool = False,
     show_heatmap: bool = True,
     show_paf: bool = True,
+    show_node_peaks: bool = False,
     direction_encoding: str = "vector",
 ) -> Image.Image:
     input_image = image_tensor_to_pil(image)
@@ -491,6 +527,8 @@ def make_aux_panel(
                 add_label(heatmap_to_pil(pred_heatmap_display, visible_mask=pred_segmentation), "Pred node heatmap"),
             ]
         )
+    if show_node_peaks and "node_peaks" in prediction:
+        panels.append(add_label(overlay_node_peaks(input_image, prediction["node_peaks"]), "Pred NMS node peaks"))
     if show_paf:
         gt_paf_magnitude = torch.linalg.vector_norm(gt_paf_display, dim=0).clamp(0.0, 1.0)
         pred_paf_magnitude = torch.linalg.vector_norm(pred_paf_display, dim=0).clamp(0.0, 1.0)
@@ -537,6 +575,12 @@ def write_aux_summary_json(
     if "detail_boundary" in prediction:
         payload["pred_detail_boundary_mean"] = float(prediction["detail_boundary"].mean())
         payload["gt_detail_boundary_mean"] = float(make_detail_edge_map(gt_seg).mean())
+    if "node_peaks" in prediction:
+        node_peaks = prediction["node_peaks"]
+        payload["pred_nms_node_count"] = int(node_peaks.shape[0])
+        payload["pred_nms_node_confidence_mean"] = (
+            float(node_peaks[:, 2].mean()) if node_peaks.shape[0] > 0 else 0.0
+        )
 
     if forest_metadata:
         graph_topology = forest_metadata.get("graph_topology")
@@ -618,6 +662,7 @@ def main() -> None:
         bool(args.show_untrained_maps) or checkpoint_train_weight(checkpoint_metadata, "W_AUX_HEATMAP", 1.0) > 0.0
     )
     show_paf = bool(args.show_untrained_maps) or checkpoint_train_weight(checkpoint_metadata, "W_AUX_PAF", 1.0) > 0.0
+    show_node_peaks = checkpoint_train_weight(checkpoint_metadata, "W_AUX_HEATMAP_OFFSET", 0.0) > 0.0
     dataset, loader_name = build_aux_panel_dataset(
         split_root=args.legacy_split_root,
         checkpoint=checkpoint_metadata,
@@ -641,7 +686,13 @@ def main() -> None:
         unpacked = unpack_aux_panel_sample(dataset[index], return_metadata=True)
         image, _label, pafs, segmentation, heatmap, sample_id, sample_name, forest_metadata = unpacked
         target_size = (int(segmentation.shape[-2]), int(segmentation.shape[-1]))
-        prediction = predict_aux_maps(model, image, device, target_size)
+        prediction = predict_aux_maps(
+            model,
+            image,
+            device,
+            target_size,
+            include_node_peaks=show_node_peaks,
+        )
         panel = make_aux_panel(
             image=image,
             gt_segmentation=segmentation,
@@ -654,6 +705,7 @@ def main() -> None:
             show_derived_detail=bool(args.show_derived_detail),
             show_heatmap=show_heatmap,
             show_paf=show_paf,
+            show_node_peaks=show_node_peaks,
             direction_encoding=direction_encoding,
         )
         panel_path = output_dir / f"{sample_name}_aux_panel.png"

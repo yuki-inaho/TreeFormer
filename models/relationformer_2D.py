@@ -71,11 +71,12 @@ class AuxMapHead(nn.Module):
         self.segmentation_head = nn.Conv2d(hidden_channels, 1, kernel_size=1)
         # Intentionally direct: no heatmap-specific tower before this projection.
         self.heatmap_head = nn.Conv2d(hidden_channels, 1, kernel_size=1)
+        self.heatmap_offset_head = nn.Conv2d(hidden_channels, 2, kernel_size=1)
         self.direction_head = nn.Conv2d(hidden_channels, 2, kernel_size=1)
         self.detail_head = nn.Conv2d(hidden_channels, 1, kernel_size=1) if out_channels == 5 else None
 
     def forward(self, feature, output_size):
-        _low_feature, logits, _heatmap_native = self.forward_with_features(feature, output_size)
+        _low_feature, logits, _heatmap_native, _offset_native = self.forward_with_features(feature, output_size)
         return logits
 
     def forward_with_features(self, feature, output_size):
@@ -87,13 +88,14 @@ class AuxMapHead(nn.Module):
 
         segmentation_logits = self.segmentation_head(self.segmentation_tower(decoder_feature))
         heatmap_native = self.heatmap_head(decoder_feature)
+        heatmap_offset_native = self.heatmap_offset_head(decoder_feature)
         direction_logits = self.direction_head(self.direction_tower(decoder_feature))
         native_maps = [segmentation_logits, heatmap_native, direction_logits]
         if self.detail_head is not None and self.detail_tower is not None:
             native_maps.append(self.detail_head(self.detail_tower(decoder_feature)))
         logits = torch.cat(native_maps, dim=1)
         full_resolution_logits = F.interpolate(logits, size=output_size, mode="bilinear", align_corners=False)
-        return low_feature, full_resolution_logits, heatmap_native
+        return low_feature, full_resolution_logits, heatmap_native, heatmap_offset_native
 
 
 class RelationFormer(nn.Module):
@@ -278,17 +280,19 @@ class RelationFormer(nn.Module):
         out = {}
         if self.aux_head is not None:
             if self.aux_graph_conditioning is None:
-                _aux_feature, aux_maps, heatmap_native = self.aux_head.forward_with_features(
+                _aux_feature, aux_maps, heatmap_native, heatmap_offset_native = self.aux_head.forward_with_features(
                     srcs[0], samples.tensors.shape[-2:]
                 )
                 out["aux_maps"] = aux_maps
                 out["aux_heatmap_native"] = heatmap_native
+                out["aux_heatmap_offset_native"] = heatmap_offset_native
             else:
-                aux_feature, aux_maps, heatmap_native = self.aux_head.forward_with_features(
+                aux_feature, aux_maps, heatmap_native, heatmap_offset_native = self.aux_head.forward_with_features(
                     srcs[0], samples.tensors.shape[-2:]
                 )
                 out["aux_maps"] = aux_maps
                 out["aux_heatmap_native"] = heatmap_native
+                out["aux_heatmap_offset_native"] = heatmap_offset_native
                 srcs[0] = srcs[0] + self.aux_graph_conditioning(aux_feature)
         if not self.graph_output_enabled:
             return None, out

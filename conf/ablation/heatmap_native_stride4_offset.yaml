@@ -1,0 +1,29 @@
+# @package _global_
+# Second native-grid comparison: preserve direct decoder heatmap logits, then
+# learn a separate sub-cell offset for each NMS-selected heatmap cell.
+TRAIN:
+  W_AUX_SEG: 1.0
+  W_AUX_HEATMAP: 1.0
+  W_AUX_HEATMAP_MSE: 0.25
+  W_AUX_HEATMAP_FOCAL: 1.0
+  AUX_HEATMAP_FOCAL_ALPHA: 2.0
+  AUX_HEATMAP_FOCAL_BETA: 4.0
+  AUX_HEATMAP_FOCAL_POS_SOURCE: target_peaks
+  W_AUX_HEATMAP_RIDGE: 0.05
+  AUX_HEATMAP_RIDGE_THRESHOLD: 0.05
+  W_AUX_HEATMAP_COORD: 0.0
+  W_AUX_HEATMAP_COORD_VAR: 0.0
+  W_AUX_HEATMAP_PEAK: 0.0
+  W_AUX_HEATMAP_OFFSET: 1.0
+  AUX_HEATMAP_OFFSET_HUBER_DELTA: 0.25
+  AUX_HEATMAP_EVAL_PEAK_THRESHOLD: 0.25
+  AUX_HEATMAP_EVAL_MATCH_RADIUS: 1.5
+DATA:
+  AUX_HEATMAP_SIGMA: 1.0
+  AUX_HEATMAP_TARGET_STRIDE: 4
+MODEL:
+  AUX_HEAD:
+    DECODER_STRIDE: 4
+log:
+  exp_name: ${oc.env:TREEFORMER_EXP_NAME,ablate_heatmap_native_stride4_offset}
+  message: "Heatmap ablation: stride-4 direct heatmap with NMS and sub-cell offset supervision"

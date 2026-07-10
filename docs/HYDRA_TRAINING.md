@@ -466,7 +466,7 @@ just cfg-private-curriculum-stage1
 | `ema` | `disabled`, `default` | EMA update/evaluation behavior |
 | `checkpoint` | `default` | last/best/periodic checkpoint policy |
 | `distributed` | `single`, `ddp` | Single-process or torchrun/DDP execution |
-| `ablation` | `heatmap_mse_baseline`, `heatmap_sigma1_5_mse`, `heatmap_focal`, `heatmap_focal_ridge`, `heatmap_focal_ridge_seg_low`, `heatmap_native_stride4` | Opt-in dense aux ablation overrides, applied as `+ablation=<name>` |
+| `ablation` | `heatmap_mse_baseline`, `heatmap_sigma1_5_mse`, `heatmap_focal`, `heatmap_focal_ridge`, `heatmap_focal_ridge_seg_low`, `heatmap_native_stride4`, `heatmap_native_stride4_offset` | Opt-in dense aux ablation overrides, applied as `+ablation=<name>` |
 
 The `data` group lives in `conf/data/` and is required by `conf/config.yaml` defaults. It is tracked in Git; a checkout missing it cannot compose any Hydra config.
 
@@ -560,7 +560,15 @@ just cache-private-native-heatmap-stride4
 
 Then compose or train with `train=seg_heatmap_paf +ablation=heatmap_native_stride4`. The panel renderer upsamples the native target and prediction only for display. The 9/10-tuple legacy collate contract remains unchanged.
 
-This first comparison intentionally has no NMS or offset head. Add those only if the stride-4 native-grid result still produces ridge-like peaks.
+This first comparison intentionally has no NMS or offset loss. If its panel still produces ridge-like peaks, use `+ablation=heatmap_native_stride4_offset`. It adds a direct decoder `2x1` offset projection, learns nearest-cell sub-pixel offsets from existing node coordinates, and applies 3x3 NMS plus those offsets only during inference. The heatmap head itself remains a direct decoder `1x1` projection.
+
+The offset profile reuses the same stride-4 cache because offsets are derived from the existing per-sample node coordinates at loss time:
+
+```bash
+export TREEFORMER_ABLATION=heatmap_native_stride4_offset
+export TREEFORMER_SEG_CACHE_ROOT=${TREEFORMER_NATIVE_HEATMAP_CACHE_ROOT:-${TREEFORMER_ASSETS_ROOT:-../TreeFormer_assets}/cache/fast_seg/native_heatmap_stride4_v4}
+just train-private-seg-heatmap-paf-ablation
+```
 
 ## Runtime GPU Speedups
 

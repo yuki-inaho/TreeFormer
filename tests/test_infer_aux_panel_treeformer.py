@@ -15,6 +15,7 @@ from infer_aux_panel_treeformer import (
     mask_paf_by_segmentation,
     mask_scalar_map_by_segmentation,
     paf_to_rgb,
+    overlay_node_peaks,
     resize_scalar_map,
     unpack_aux_panel_sample,
     write_aux_summary_json,
@@ -44,6 +45,7 @@ def test_aux_visualization_helpers_return_rgb_images():
     assert image_tensor_to_pil(image).mode == "RGB"
     assert heatmap_to_pil(heatmap).mode == "RGB"
     assert paf_to_rgb(paf).mode == "RGB"
+    assert overlay_node_peaks(Image.new("RGB", (10, 12)), torch.tensor([[4.0, 5.0, 0.9]])).mode == "RGB"
 
 
 def test_resize_scalar_map_expands_native_heatmap_for_panel_display():

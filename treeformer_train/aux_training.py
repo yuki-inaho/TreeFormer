@@ -9,6 +9,7 @@ import torch.distributed as dist
 import torch.nn.functional as F
 
 from .detail_targets import make_stdc_detail_boundary_target
+from .heatmap_offsets import bounded_offset_prediction, make_native_offset_targets
 from .runtime import amp_context
 
 
@@ -55,6 +56,8 @@ class AuxLossWeights:
     heatmap_peak_min_target: float = 0.5
     heatmap_eval_peak_threshold: float = 0.5
     heatmap_eval_match_radius: float = 6.0
+    heatmap_offset: float = 0.0
+    heatmap_offset_huber_delta: float = 0.25
     paf: float = 0.25
     paf_l1: float = 1.0
     paf_angular: float = 0.0
@@ -165,6 +168,8 @@ def build_aux_loss_weights(train_config: Any) -> AuxLossWeights:
         heatmap_peak_min_target=float(_get(train_config, "AUX_HEATMAP_PEAK_MIN_TARGET", 0.5)),
         heatmap_eval_peak_threshold=float(_get(train_config, "AUX_HEATMAP_EVAL_PEAK_THRESHOLD", 0.5)),
         heatmap_eval_match_radius=float(_get(train_config, "AUX_HEATMAP_EVAL_MATCH_RADIUS", 6.0)),
+        heatmap_offset=float(_get(train_config, "W_AUX_HEATMAP_OFFSET", 0.0)),
+        heatmap_offset_huber_delta=float(_get(train_config, "AUX_HEATMAP_OFFSET_HUBER_DELTA", 0.25)),
         paf=float(_get(train_config, "W_AUX_PAF", 0.25)),
         paf_l1=float(_get(train_config, "W_AUX_PAF_L1", 1.0)),
         paf_angular=float(_get(train_config, "W_AUX_PAF_ANGULAR", 0.0)),
@@ -194,11 +199,12 @@ def _maybe_stack_images(images: list[torch.Tensor]) -> torch.Tensor | list[torch
 
 def _prepare_aux_batch(
     batchdata: Any, device: torch.device
-) -> tuple[torch.Tensor | list[torch.Tensor], dict[str, torch.Tensor]]:
+) -> tuple[torch.Tensor | list[torch.Tensor], dict[str, Any]]:
     batch = batchdata[0]
     non_blocking = device.type == "cuda"
     images = [img.to(device, dtype=torch.float32, non_blocking=non_blocking) for img in batch[0]]
     targets = {
+        "nodes": [node.to(device, dtype=torch.float32, non_blocking=non_blocking) for node in batch[1]],
         "paf": batch[3].to(device, dtype=torch.float32, non_blocking=non_blocking),
         "paf_mask": batch[4].to(device, dtype=torch.bool, non_blocking=non_blocking),
         "segmentation": batch[5].to(device, dtype=torch.float32, non_blocking=non_blocking),
@@ -771,9 +777,73 @@ def _select_heatmap_logits(
     return _resize_like(native_logits, heatmap_target)
 
 
+def _select_heatmap_offset_logits(
+    output: dict[str, torch.Tensor],
+    heatmap_target: torch.Tensor,
+    weights: AuxLossWeights,
+) -> torch.Tensor | None:
+    if weights.heatmap_offset <= 0.0:
+        return None
+    offset_logits = output.get("aux_heatmap_offset_native")
+    if offset_logits is None:
+        raise KeyError(
+            "W_AUX_HEATMAP_OFFSET>0 requires model output 'aux_heatmap_offset_native'; "
+            "use the stride-4 native aux head"
+        )
+    if offset_logits.ndim != 4 or offset_logits.shape[1] != 2:
+        raise ValueError(
+            "aux_heatmap_offset_native must be [N,2,H,W], "
+            f"got shape {tuple(offset_logits.shape)}"
+        )
+    if offset_logits.shape[0] != heatmap_target.shape[0]:
+        raise ValueError(
+            "aux_heatmap_offset_native batch size does not match heatmap target: "
+            f"{offset_logits.shape[0]} != {heatmap_target.shape[0]}"
+        )
+    return _resize_like(offset_logits, heatmap_target)
+
+
+def _heatmap_offset_loss_and_metric(
+    offset_logits: torch.Tensor | None,
+    targets: dict[str, Any],
+    heatmap_target: torch.Tensor,
+    weights: AuxLossWeights,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    zero = heatmap_target.new_zeros(())
+    if offset_logits is None:
+        return zero, zero
+    nodes_by_image = targets.get("nodes")
+    if nodes_by_image is None:
+        raise KeyError("W_AUX_HEATMAP_OFFSET>0 requires per-image 'nodes' in aux targets")
+    if not isinstance(nodes_by_image, (list, tuple)):
+        raise TypeError("aux target 'nodes' must be a list or tuple of [N,2] tensors")
+    if len(nodes_by_image) != heatmap_target.shape[0]:
+        raise ValueError(
+            "aux target node list length does not match heatmap batch size: "
+            f"{len(nodes_by_image)} != {heatmap_target.shape[0]}"
+        )
+    offset_target, offset_mask = make_native_offset_targets(
+        nodes_by_image,
+        target_size=tuple(int(item) for item in heatmap_target.shape[-2:]),
+        device=offset_logits.device,
+        dtype=offset_logits.dtype,
+    )
+    prediction = bounded_offset_prediction(offset_logits)
+    elementwise_huber = F.huber_loss(
+        prediction,
+        offset_target,
+        reduction="none",
+        delta=weights.heatmap_offset_huber_delta,
+    )
+    elementwise_absolute_error = torch.abs(prediction - offset_target)
+    mask = offset_mask.to(dtype=prediction.dtype)
+    denominator = (mask.sum() * prediction.shape[1]).clamp_min(1.0)
+    return (elementwise_huber * mask).sum() / denominator, (elementwise_absolute_error * mask).sum() / denominator
+
+
 def compute_aux_losses(
     output: dict[str, torch.Tensor],
-    targets: dict[str, torch.Tensor],
+    targets: dict[str, Any],
     weights: AuxLossWeights,
     *,
     loss_core: AuxLossCore | None = None,
@@ -792,6 +862,7 @@ def compute_aux_losses(
     paf_target = targets["paf"]
     paf_mask = targets["paf_mask"].to(dtype=torch.float32)
     heatmap_logits = _select_heatmap_logits(output, aux_maps, seg_target, heatmap_target)
+    offset_logits = _select_heatmap_offset_logits(output, heatmap_target, weights)
 
     # Build the detail target only when the caller has not already shared one.
     # compute_aux_eval_metrics creates it first so its loss and metric paths reuse
@@ -806,17 +877,25 @@ def compute_aux_losses(
         )
 
     if loss_core is not None:
-        return loss_core(aux_maps, heatmap_logits, seg_target, heatmap_target, paf_target, paf_mask, detail_target)
-    return _compute_aux_loss_terms(
-        aux_maps,
-        heatmap_logits,
-        seg_target,
-        heatmap_target,
-        paf_target,
-        paf_mask,
-        weights,
-        detail_target,
-    )
+        losses = loss_core(aux_maps, heatmap_logits, seg_target, heatmap_target, paf_target, paf_mask, detail_target)
+    else:
+        losses = _compute_aux_loss_terms(
+            aux_maps,
+            heatmap_logits,
+            seg_target,
+            heatmap_target,
+            paf_target,
+            paf_mask,
+            weights,
+            detail_target,
+        )
+    offset_loss, _offset_mae = _heatmap_offset_loss_and_metric(offset_logits, targets, heatmap_target, weights)
+    if weights.heatmap_offset > 0.0:
+        losses = dict(losses)
+        losses["heatmap_total"] = losses["heatmap_total"] + weights.heatmap_offset * offset_loss
+        losses["total"] = losses["total"] + weights.heatmap * weights.heatmap_offset * offset_loss
+    losses["heatmap_offset"] = offset_loss
+    return losses
 
 
 def _heatmap_peak_detection_metrics(
@@ -900,7 +979,7 @@ def _heatmap_peak_detection_metrics(
 
 def compute_aux_eval_metrics(
     output: dict[str, torch.Tensor],
-    targets: dict[str, torch.Tensor],
+    targets: dict[str, Any],
     weights: AuxLossWeights,
     *,
     loss_core: AuxLossCore | None = None,
@@ -928,6 +1007,13 @@ def compute_aux_eval_metrics(
 
     seg_logits = _resize_like(aux_maps[:, 0:1], seg_target)
     heatmap_logits = _select_heatmap_logits(output, aux_maps, seg_target, heatmap_target)
+    offset_logits = _select_heatmap_offset_logits(output, heatmap_target, weights)
+    _offset_loss, heatmap_offset_mae = _heatmap_offset_loss_and_metric(
+        offset_logits,
+        targets,
+        heatmap_target,
+        weights,
+    )
     paf_pred = _resize_like(aux_maps[:, 2:4], paf_target)
 
     seg_probabilities = torch.sigmoid(seg_logits)
@@ -1036,6 +1122,7 @@ def compute_aux_eval_metrics(
         "heatmap_peak_mean": heatmap_peak_mean,
         "heatmap_nonpeak_foreground_mean": heatmap_nonpeak_foreground_mean,
         "heatmap_peak_contrast": heatmap_peak_contrast,
+        "heatmap_offset_mae": heatmap_offset_mae,
         **heatmap_peak_detection,
         "paf_masked_l1": paf_masked_l1,
         "direction_angular_error_deg": direction_angular_error_deg,

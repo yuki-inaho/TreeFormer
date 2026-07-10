@@ -46,6 +46,7 @@ def _prepare_joint_batch(
     if len(batch) > 8 and isinstance(batch[-2], dict):
         graph_target.update(batch[-2])
     aux_target = {
+        "nodes": graph_target["nodes"],
         "paf": batch[3].to(device, dtype=torch.float32, non_blocking=non_blocking),
         "paf_mask": batch[4].to(device, dtype=torch.bool, non_blocking=non_blocking),
         "segmentation": batch[5].to(device, dtype=torch.float32, non_blocking=non_blocking),
@@ -118,6 +119,7 @@ def epoch_train_joint_graph_aux(
                 "aux_heatmap_coord": aux_losses["heatmap_coord"],
                 "aux_heatmap_coord_var": aux_losses["heatmap_coord_var"],
                 "aux_heatmap_peak": aux_losses["heatmap_peak"],
+                "aux_heatmap_offset": aux_losses["heatmap_offset"],
                 "aux_paf_total": aux_losses["paf_total"],
                 "aux_paf_angular": aux_losses["paf_angular"],
             },

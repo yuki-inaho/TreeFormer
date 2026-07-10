@@ -128,4 +128,5 @@ def test_relationformer_can_condition_graph_features_on_aux_trunk():
     assert out["aux_maps"].shape[1] == 5
     assert out["aux_maps"].shape[-2:] == (32, 32)
     assert out["aux_heatmap_native"].shape == (1, 1, 8, 8)
+    assert out["aux_heatmap_offset_native"].shape == (1, 2, 8, 8)
     assert isinstance(model.aux_head.heatmap_head, torch.nn.Conv2d)
