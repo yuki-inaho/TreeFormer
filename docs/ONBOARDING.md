@@ -27,6 +27,10 @@
 - `train=seg_heatmap` は `seg_only` と同じ外部 mask supervision に、graph annotation 由来の node heatmap target だけを追加する。graph loss は引き続き 0、PAF loss も 0。heatmap lossはGT mask内だけで計算し、mask外は無視する。前段の segmentation checkpoint から始める場合は `TREEFORMER_PRETRAINED_CHECKPOINT=<best.pt>` と `TREEFORMER_PRETRAINED_KEY=model` を渡す。
 - `train=seg_heatmap_paf` は `seg_heatmap` にmask-skeleton由来の無向direction map supervisionを追加する。外部binary maskを骨格化し、EDTで局所接線をmask foreground全体へ伝播する。分岐・端点周辺はdirection lossから除外し、`cos(2*theta), sin(2*theta)`で学習する。graph output / graph lossは引き続き無効で、segmentation-only / heatmap-onlyの安定性を確認してから進める。
 - node heatmap が点ではなく ridge 状に出る場合は、`+ablation=heatmap_center_offset_rank` を優先する。このprofileはResNet layer1の実stride-4特徴とstride-8 decoder特徴をaux専用FPNで融合し、元graph node座標からnative center maskを生成する。Gaussian targetはnegative weightingにだけ使い、center focal、sub-cell offset、他GT近傍を負例から除外するstructured rankingを使う。legacy DSNT / variance / peakness / ridge / MSEとsegmentation・PAF lossは診断中は無効にする。比較軸は `val/heatmap_node_recall`、`val/heatmap_node_precision`、`val/heatmap_duplicate_peak_rate`、`val/heatmap_background_peaks_per_image`、`val/heatmap_center_collision_rate`、`val/heatmap_offset_mae`。native target用cacheを別に生成する。
+- **解像度の必須契約:** `DATA.MAX_SIZE=128` と `DATA.SEG_RESIZE_POLICY=legacy_half` は疎通確認専用のsmoke設定であり、細い構造を対象とするfull trainingには使わない。800x600 RGBのfull-resolution dense stageでは、`DATA.MAX_SIZE=640` と `DATA.SEG_RESIZE_POLICY=full` を必ず同時に指定し、loader出力が640x480であることを1 sampleで確認する。`legacy_half` のまま128を指定すると128x96になり、stride-4 heatmapは32x24になるため、細い構造の学習・評価には不適切である。
+- **full-resolution joint dense stage:** `conf/ablation/heatmap_center_offset_rank_joint_fullres.yaml` は640x480、external-mask segmentation、node-center heatmap、sub-cell offset、structured ranking、mask-skeleton PAFを同時に学習するprofileである。`heatmap_center_offset_rank.yaml` はcenter objectiveだけを検証する診断profileで、segmentation / PAF lossを意図的に0にする。segmentation panelやPAFを評価するfull runに診断profile単体を使わない。
+- **cache整合性:** disk cacheの生成時とtraining時で、`MAX_SIZE`、`SEG_RESIZE_POLICY`、heatmap sigma / stride、direction target source / encodingを一致させる。解像度またはtarget contractを変えた場合、既存cacheを流用せずrepo外に新規cacheを生成する。
+- **validation / checkpoint契約:** full runでは `TRAIN.VAL_INTERVAL=10` を明示する。`checkpoint.save_best=true` と `checkpoint.save_last=true` の場合、best / lastはvalidationを実行したepoch（10, 20, ...）でのみ更新される。checkpoint保存頻度をvalidation頻度より高くしない。開始前に解決済みHydra configで、`MAX_SIZE`、resize policy、batch size、loss weights、optimizer、pretrained checkpoint、validation intervalを確認する。
 - legacy 互換の `train=seg_supervised` は外部 mask 由来の STDC-style detail boundary を弱い regularizer として使う既存設定。新規実験では、目的が明確な `train=seg_only` / `train=seg_heatmap` / `train=seg_heatmap_paf` を優先する。
 - dense aux stage は `FastSegSupervisedDataset` を使う。legacy loader の graph-derived PAF / heatmap 生成を避け、`DATA.AUX_TARGET_MODE` で `seg_only` / `seg_heatmap` / `seg_heatmap_paf` を切り替える。full run 前に repo 外 disk cache を生成し、`seg_only` は `just cache-private-fast-seg`、`seg_heatmap` は `just cache-private-fast-seg-heatmap`、`seg_heatmap_paf` は `just cache-private-fast-seg-heatmap-paf` を使う。cache format v4 はdirection target source/encodingとheatmap target strideを含むため、旧cacheは再利用せず生成し直す。native stride 4 heatmapには `just cache-private-native-heatmap-stride4` を使う。local disk cache の実測では `DATA.NUM_WORKERS=0` が最速だったため、joint graph+aux の pilot / full recipe はこれを既定にする。cache 生成先は `${TREEFORMER_SEG_CACHE_ROOT}` または `${TREEFORMER_ASSETS_ROOT}/cache/fast_seg/...` とし、Git に入れない。
 - virtual-root forest graph training は `docs/TreeFormer_virtual_root_forest_formalization.pdf` / `.tex` と `temp/workdoc_Jul09-2026_treeformer_virtual_root_forest.md` の方針に従う。TreeFormer 側は `component_id` などの optional metadata を読み、`train=virtual_root` では metadata 欠落時に暗黙 fallback せず明示エラーにする。
@@ -76,12 +80,14 @@
 - smoke training config、dry-run config、pytest の保守。
 - augmentation config と transform contract の保守。geometry DA は必ず image と node coordinates を同期する。
 - full training を開始する前の事前検証、ログ設計、checkpoint 保存先確認。
+- full-resolution runでは、`--cfg job`で640/fullとloss weightsを確認し、1 batch forwardで入力tensor形状・GPUメモリ・finite lossを確認してから長時間実行する。
 - README / docs / workdoc への実行手順追記。
 - training stage 後の qualitative check 用 inference panel 生成。checkpoint と dataset root は環境変数または CLI 引数で渡し、出力は `${TREEFORMER_ASSETS_ROOT}` 配下に置く。
 
 ### 任せないタスク（例）
 
 - 明示指示なしの full training 長時間実行。
+- `MAX_SIZE=128` / `legacy_half`のsmoke設定を、細い構造のfull trainingへ流用すること。
 - 画像だけを geometry 変形して graph annotation を更新しない変更。
 - repo 内への dataset / checkpoint / `.tar.gz` / `.pkl` / `.npz` 追加。
 - private dataset の実パス、生成コマンド、内部由来が分かる名前の docs 追記。
@@ -115,7 +121,7 @@
 - **ドキュメント更新時の記載ルール:** 変更した理由、対象ファイル、検証コマンド、結果、残課題を同じ更新に含める。
 - **TBDの扱い:** TBD は owner、確認方法、期限または次アクションを併記する。単独の TBD を残さない。
 - **レビュー/承認フロー:** 実装 → 最小テスト → artifact 混入確認 → workdoc / docs 更新 → commit。長時間学習は開始前に方針確認する。
-- **その他の運用ルール:** `git add -A` は避け、混在 worktree では明示ファイルだけ stage する。生成物 cleanup 後に `git status` を確認する。
+- **その他の運用ルール:** `git add -A` は避け、混在 worktree では明示ファイルだけ stage する。生成物 cleanup 後に `git status` を確認する。commit前にstaged diffを読み、privateな固有名・ホスト名・実データパス・実行基盤名が含まれないことを検索して確認する。一般的なライブラリAPI名は、このprivacy scanでいうprivate情報とは区別する。
 
 ## 8. Pretrained Weights
 
