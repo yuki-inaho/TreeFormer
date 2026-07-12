@@ -1,0 +1,42 @@
+# @package _global_
+# Diagnostic dense-node objective.  Node positives are rasterized directly from
+# graph coordinates; the Gaussian target remains only as a negative-weight map.
+# This intentionally disables segmentation/PAF and legacy ridge/DSNT/peakness
+# terms so a short run answers one question: can the stride-4 aux head learn
+# isolated centers plus their sub-cell offsets?
+TRAIN:
+  W_AUX_SEG: 0.0
+  W_AUX_DETAIL: 0.0
+  W_AUX_HEATMAP: 1.0
+  W_AUX_HEATMAP_MSE: 0.0
+  W_AUX_HEATMAP_FOCAL: 1.0
+  AUX_HEATMAP_FOCAL_ALPHA: 2.0
+  AUX_HEATMAP_FOCAL_BETA: 4.0
+  AUX_HEATMAP_FOCAL_POS_SOURCE: node_centers
+  W_AUX_HEATMAP_RIDGE: 0.0
+  W_AUX_HEATMAP_COORD: 0.0
+  W_AUX_HEATMAP_COORD_VAR: 0.0
+  W_AUX_HEATMAP_PEAK: 0.0
+  W_AUX_HEATMAP_OFFSET: 1.0
+  AUX_HEATMAP_OFFSET_HUBER_DELTA: 0.25
+  W_AUX_HEATMAP_RANK: 0.25
+  AUX_HEATMAP_RANK_EXCLUSION_RADIUS: 1.5
+  AUX_HEATMAP_RANK_MARGIN: 1.0
+  AUX_HEATMAP_RANK_DISTANCE_MARGIN: 0.25
+  AUX_HEATMAP_RANK_TEMPERATURE: 1.0
+  AUX_HEATMAP_RANK_TOPK: 64
+  AUX_HEATMAP_MASK_SOURCE: segmentation
+  AUX_HEATMAP_MASK_OUTSIDE_WEIGHT: 0.05
+  W_AUX_PAF: 0.0
+  AUX_HEATMAP_EVAL_PEAK_THRESHOLD: 0.25
+  AUX_HEATMAP_EVAL_MATCH_RADIUS: 1.5
+DATA:
+  AUX_HEATMAP_SIGMA: 1.0
+  AUX_HEATMAP_TARGET_STRIDE: 4
+MODEL:
+  AUX_HEAD:
+    DECODER_STRIDE: 4
+    GRAPH_CONDITIONING: none
+log:
+  exp_name: ${oc.env:TREEFORMER_EXP_NAME,ablate_heatmap_center_offset_rank}
+  message: "Node-center focal, offset, and GT-aware structured ranking on fused stride-4 aux features"

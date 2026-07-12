@@ -33,6 +33,17 @@ class DummyEncoder(torch.nn.Module):
         return [DummyNestedTensor(feature, mask)], [pos]
 
 
+class DummyEncoderWithStride4(DummyEncoder):
+    aux_num_channels = 6
+
+    def forward(self, samples):
+        features, pos = super().forward(samples)
+        batch, _channels, height, width = samples.tensors.shape
+        high = torch.zeros((batch, self.aux_num_channels, max(1, height // 4), max(1, width // 4)))
+        high_mask = torch.zeros((batch, high.shape[-2], high.shape[-1]), dtype=torch.bool)
+        return features, pos, DummyNestedTensor(high, high_mask)
+
+
 class DummyDecoder(torch.nn.Module):
     def __init__(self, num_queries: int, hidden_dim: int):
         super().__init__()
@@ -130,3 +141,27 @@ def test_relationformer_can_condition_graph_features_on_aux_trunk():
     assert out["aux_heatmap_native"].shape == (1, 1, 8, 8)
     assert out["aux_heatmap_offset_native"].shape == (1, 2, 8, 8)
     assert isinstance(model.aux_head.heatmap_head, torch.nn.Conv2d)
+
+
+def test_relationformer_fuses_real_stride4_aux_feature_when_encoder_provides_it():
+    from models.relationformer_2D import RelationFormer
+
+    cfg = _config(root_head_enabled=False)
+    cfg.MODEL.AUX_HEAD = SimpleNamespace(
+        ENABLED=True,
+        HIDDEN_DIM=8,
+        OUT_CHANNELS=4,
+        GRAPH_CONDITIONING="none",
+    )
+    model = RelationFormer(
+        DummyEncoderWithStride4(cfg.MODEL.DECODER.HIDDEN_DIM),
+        DummyDecoder(cfg.MODEL.DECODER.OBJ_TOKEN + cfg.MODEL.DECODER.RLN_TOKEN, cfg.MODEL.DECODER.HIDDEN_DIM),
+        cfg,
+        _args(),
+    )
+
+    _h, out = model([torch.zeros((3, 32, 32), dtype=torch.float32)])
+
+    assert model.aux_head.high_resolution_encoder is not None
+    assert model.aux_head.fusion_refine is not None
+    assert out["aux_heatmap_native"].shape == (1, 1, 8, 8)

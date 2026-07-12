@@ -29,7 +29,7 @@ from infer_panel_treeformer import (
     select_state_dict,
 )
 from treeformer_train.detail_targets import make_stdc_detail_boundary_target
-from treeformer_train.heatmap_offsets import decode_native_heatmap_peaks
+from treeformer_train.heatmap_offsets import decode_native_heatmap_peaks, make_native_center_targets
 
 
 def _nested_mapping_get(mapping: Mapping[str, Any], path: tuple[str, ...], default: Any = None) -> Any:
@@ -115,10 +115,19 @@ def heatmap_to_pil(
     values: torch.Tensor | np.ndarray,
     *,
     visible_mask: torch.Tensor | np.ndarray | None = None,
+    normalize: bool = False,
 ) -> Image.Image:
-    """Small dependency-free blue-green-yellow-red heatmap."""
+    """Render a probability heatmap without hiding its absolute scale.
 
-    array = np.clip(normalize01(values), 0.0, 1.0)
+    ``normalize=True`` remains available for explicitly requested presentation
+    images, but diagnostic panels intentionally use the native [0,1]
+    probability range so a weak uniform response cannot look like a sharp peak.
+    """
+
+    raw = values.detach().cpu().float().numpy() if isinstance(values, torch.Tensor) else np.asarray(values)
+    array = normalize01(raw) if normalize else np.asarray(raw, dtype=np.float32)
+    array = np.nan_to_num(array, nan=0.0, posinf=1.0, neginf=0.0)
+    array = np.clip(array, 0.0, 1.0)
     red = np.clip(1.5 * array - 0.25, 0.0, 1.0)
     green = np.clip(1.5 - np.abs(array - 0.55) * 2.2, 0.0, 1.0)
     blue = np.clip(1.2 - 2.0 * array, 0.0, 1.0)
@@ -192,7 +201,9 @@ def paf_to_rgb(
 
 
 def _as_visible_mask(mask: torch.Tensor | np.ndarray, *, shape: tuple[int, int]) -> np.ndarray:
-    array = mask.detach().cpu().float().numpy() if isinstance(mask, torch.Tensor) else np.asarray(mask, dtype=np.float32)
+    array = (
+        mask.detach().cpu().float().numpy() if isinstance(mask, torch.Tensor) else np.asarray(mask, dtype=np.float32)
+    )
     array = np.squeeze(array)
     if array.shape != shape:
         raise ValueError(f"visible mask shape {array.shape} does not match map shape {shape}")
@@ -261,7 +272,7 @@ def resize_aux_maps(aux_maps: torch.Tensor, target_size: tuple[int, int]) -> tor
     return F.interpolate(aux_maps, size=target_size, mode="bilinear", align_corners=False)
 
 
-def resize_scalar_map(values: torch.Tensor, target_size: tuple[int, int]) -> torch.Tensor:
+def resize_scalar_map(values: torch.Tensor, target_size: tuple[int, int], *, mode: str = "bilinear") -> torch.Tensor:
     """Resize a scalar map for display without changing its training contract."""
 
     if values.ndim == 2:
@@ -273,7 +284,12 @@ def resize_scalar_map(values: torch.Tensor, target_size: tuple[int, int]) -> tor
     else:
         raise ValueError(f"scalar map must be [H,W], [1,H,W], or [N,1,H,W], got {tuple(values.shape)}")
     if tuple(batched.shape[-2:]) != tuple(target_size):
-        batched = F.interpolate(batched.float(), size=target_size, mode="bilinear", align_corners=False)
+        if mode == "nearest":
+            batched = F.interpolate(batched.float(), size=target_size, mode=mode)
+        elif mode == "bilinear":
+            batched = F.interpolate(batched.float(), size=target_size, mode=mode, align_corners=False)
+        else:
+            raise ValueError(f"unsupported scalar display resize mode: {mode!r}")
     return batched.squeeze(0).squeeze(0)
 
 
@@ -350,7 +366,9 @@ def build_aux_panel_dataset(
                 heatmap_target_stride=int(checkpoint_data_value(checkpoint, "AUX_HEATMAP_TARGET_STRIDE", 1)),
                 paf_line_thickness=int(checkpoint_data_value(checkpoint, "AUX_PAF_LINE_THICKNESS", 2)),
                 paf_mask_thickness=int(checkpoint_data_value(checkpoint, "AUX_PAF_MASK_THICKNESS", 6)),
-                direction_target_source=str(checkpoint_data_value(checkpoint, "AUX_DIRECTION_TARGET_SOURCE", "graph_edges")),
+                direction_target_source=str(
+                    checkpoint_data_value(checkpoint, "AUX_DIRECTION_TARGET_SOURCE", "graph_edges")
+                ),
                 direction_encoding=str(checkpoint_data_value(checkpoint, "AUX_DIRECTION_ENCODING", "vector")),
                 direction_tangent_radius=int(checkpoint_data_value(checkpoint, "AUX_DIRECTION_TANGENT_RADIUS", 8)),
                 direction_junction_exclusion_radius=int(
@@ -442,13 +460,24 @@ def predict_aux_maps(
         aux_maps = resize_aux_maps(aux_maps.detach().cpu(), target_size)[0]
         native_heatmap = output.get("aux_heatmap_native")
         native_offsets = output.get("aux_heatmap_offset_native")
+        native_heatmap_logits = None
+        native_offsets_cpu = None
         if native_heatmap is not None:
-            native_heatmap = resize_scalar_map(native_heatmap.detach().cpu(), target_size)
+            native_heatmap_logits = native_heatmap.detach().cpu()
+            native_offsets_cpu = native_offsets.detach().cpu() if native_offsets is not None else None
+            native_heatmap = torch.sigmoid(native_heatmap_logits[0, 0]).clamp(0.0, 1.0)
     prediction = {
         "segmentation": torch.sigmoid(aux_maps[0]).clamp(0.0, 1.0),
-        "heatmap": torch.sigmoid(native_heatmap if native_heatmap is not None else aux_maps[1]).clamp(0.0, 1.0),
+        "heatmap": resize_scalar_map(native_heatmap, target_size, mode="nearest")
+        if native_heatmap is not None
+        else torch.sigmoid(aux_maps[1]).clamp(0.0, 1.0),
         "paf": torch.tanh(aux_maps[2:4]).clamp(-1.0, 1.0),
     }
+    if native_heatmap is not None:
+        prediction["heatmap_native"] = native_heatmap
+        prediction["heatmap_native_logits"] = native_heatmap_logits[0, 0]
+        if native_offsets_cpu is not None:
+            prediction["heatmap_offset_native"] = native_offsets_cpu[0]
     if aux_maps.shape[0] >= 5:
         prediction["detail_boundary"] = torch.sigmoid(aux_maps[4]).clamp(0.0, 1.0)
     if include_node_peaks and output.get("aux_heatmap_native") is not None:
@@ -474,6 +503,76 @@ def predict_aux_maps(
     return prediction
 
 
+def _parse_peak_thresholds(value: str) -> tuple[float, ...]:
+    thresholds = tuple(float(item.strip()) for item in str(value).split(",") if item.strip())
+    if not thresholds:
+        raise ValueError("at least one --peak-thresholds value is required")
+    if any(threshold < 0.0 or threshold > 1.0 for threshold in thresholds):
+        raise ValueError("--peak-thresholds values must lie in [0, 1]")
+    return thresholds
+
+
+def peak_pr_counts(
+    prediction: Mapping[str, torch.Tensor],
+    nodes: torch.Tensor,
+    *,
+    threshold: float,
+    match_radius: float,
+) -> dict[str, int]:
+    """Return segmentation-gated NMS TP/FP/FN counts on the native grid."""
+
+    native_logits = prediction.get("heatmap_native_logits")
+    if native_logits is None:
+        raise KeyError("peak PR requires a model output with aux_heatmap_native")
+    if native_logits.ndim != 2:
+        raise ValueError(f"native heatmap logits must be [H,W], got {tuple(native_logits.shape)}")
+    offsets = prediction.get("heatmap_offset_native")
+    logits = native_logits.unsqueeze(0).unsqueeze(0)
+    offset_batch = offsets.unsqueeze(0) if offsets is not None else None
+    segmentation = prediction["segmentation"].unsqueeze(0).unsqueeze(0)
+    segmentation_native = F.interpolate(segmentation, size=logits.shape[-2:], mode="bilinear", align_corners=False)
+    predicted = decode_native_heatmap_peaks(
+        logits,
+        offset_batch,
+        threshold=float(threshold),
+        valid_mask=segmentation_native >= 0.5,
+    )[0][:, :2]
+    centers, _node_counts, _collisions = make_native_center_targets(
+        [nodes],
+        target_size=tuple(int(item) for item in logits.shape[-2:]),
+        device=logits.device,
+    )
+    ground_truth = torch.nonzero(centers[0, 0], as_tuple=False).flip(1).to(dtype=predicted.dtype)
+    if ground_truth.numel() == 0:
+        return {"tp": 0, "fp": int(predicted.shape[0]), "fn": 0}
+    if predicted.numel() == 0:
+        return {"tp": 0, "fp": 0, "fn": int(ground_truth.shape[0])}
+    within = torch.cdist(ground_truth, predicted) <= float(match_radius)
+    matched_gt = within.any(dim=1)
+    matched_pred = within.any(dim=0)
+    return {
+        "tp": int(matched_gt.sum().item()),
+        "fp": int((~matched_pred).sum().item()),
+        "fn": int((~matched_gt).sum().item()),
+    }
+
+
+def summarize_peak_pr(counts: Mapping[float, Mapping[str, int]]) -> dict[str, dict[str, float | int]]:
+    """Convert accumulated TP/FP/FN counts into a serializable threshold sweep."""
+
+    summary: dict[str, dict[str, float | int]] = {}
+    for threshold, value in sorted(counts.items()):
+        tp, fp, fn = int(value["tp"]), int(value["fp"]), int(value["fn"])
+        summary[f"{threshold:.4f}"] = {
+            "tp": tp,
+            "fp": fp,
+            "fn": fn,
+            "precision": tp / max(tp + fp, 1),
+            "recall": tp / max(tp + fn, 1),
+        }
+    return summary
+
+
 def make_aux_panel(
     *,
     image: torch.Tensor,
@@ -493,7 +592,8 @@ def make_aux_panel(
     input_image = image_tensor_to_pil(image)
     gt_segmentation = gt_segmentation.float().clamp(0.0, 1.0)
     display_size = (int(gt_segmentation.shape[-2]), int(gt_segmentation.shape[-1]))
-    gt_heatmap = resize_scalar_map(gt_heatmap.float().clamp(0.0, 1.0), display_size)
+    gt_heatmap_native = gt_heatmap.float().clamp(0.0, 1.0)
+    gt_heatmap = resize_scalar_map(gt_heatmap_native, display_size, mode="nearest")
     gt_paf = (
         gt_paf.float().permute(2, 0, 1).clamp(-1.0, 1.0)
         if gt_paf.ndim == 3 and gt_paf.shape[-1] == 2
@@ -503,6 +603,8 @@ def make_aux_panel(
     pred_segmentation = prediction["segmentation"]
     pred_heatmap = prediction["heatmap"]
     pred_paf = prediction["paf"]
+    pred_heatmap_native = prediction.get("heatmap_native", pred_heatmap).float().clamp(0.0, 1.0)
+    pred_heatmap_native = resize_scalar_map(pred_heatmap_native, display_size, mode="nearest")
     gt_heatmap_display = mask_scalar_map_by_segmentation(gt_heatmap, gt_segmentation)
     pred_heatmap_display = mask_scalar_map_by_segmentation(pred_heatmap, pred_segmentation)
     gt_paf_display = mask_paf_by_segmentation(gt_paf, gt_segmentation)
@@ -531,8 +633,12 @@ def make_aux_panel(
     if show_heatmap:
         panels.extend(
             [
-                add_label(heatmap_to_pil(gt_heatmap_display, visible_mask=gt_segmentation), "GT node heatmap"),
-                add_label(heatmap_to_pil(pred_heatmap_display, visible_mask=pred_segmentation), "Pred node heatmap"),
+                add_label(heatmap_to_pil(gt_heatmap), "GT node heatmap (native, absolute)"),
+                add_label(heatmap_to_pil(pred_heatmap_native), "Pred node heatmap (native, absolute)"),
+                add_label(heatmap_to_pil(gt_heatmap_display, visible_mask=gt_segmentation), "GT heatmap × GT mask"),
+                add_label(
+                    heatmap_to_pil(pred_heatmap_display, visible_mask=pred_segmentation), "Pred heatmap × Pred mask"
+                ),
             ]
         )
     if show_node_peaks and "node_peaks" in prediction:
@@ -588,9 +694,7 @@ def write_aux_summary_json(
     if "node_peaks" in prediction:
         node_peaks = prediction["node_peaks"]
         payload["pred_nms_node_count"] = int(node_peaks.shape[0])
-        payload["pred_nms_node_confidence_mean"] = (
-            float(node_peaks[:, 2].mean()) if node_peaks.shape[0] > 0 else 0.0
-        )
+        payload["pred_nms_node_confidence_mean"] = float(node_peaks[:, 2].mean()) if node_peaks.shape[0] > 0 else 0.0
 
     if forest_metadata:
         graph_topology = forest_metadata.get("graph_topology")
@@ -655,6 +759,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Render heatmap/PAF panels even when their checkpoint loss weights are zero",
     )
     parser.add_argument("--save-json", action="store_true", help="Save compact per-sample map statistics JSON")
+    parser.add_argument(
+        "--peak-thresholds",
+        default="0.10,0.25,0.50,0.75",
+        help="Comma-separated native NMS thresholds for the saved precision/recall sweep",
+    )
+    parser.add_argument(
+        "--peak-match-radius",
+        type=float,
+        default=1.5,
+        help="Native-grid matching radius used by the saved peak precision/recall sweep",
+    )
     return parser
 
 
@@ -690,11 +805,16 @@ def main() -> None:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     limit = len(dataset) if args.limit is None or args.limit <= 0 else min(int(args.limit), len(dataset))
+    thresholds = _parse_peak_thresholds(args.peak_thresholds)
+    pr_counts = {threshold: {"tp": 0, "fp": 0, "fn": 0} for threshold in thresholds}
+    native_heatmap_available = False
     print(f"Rendering {limit} aux panels from {args.legacy_split_root} with {loader_name} loader")
 
     for index in range(limit):
-        unpacked = unpack_aux_panel_sample(dataset[index], return_metadata=True)
+        sample = dataset[index]
+        unpacked = unpack_aux_panel_sample(sample, return_metadata=True)
         image, _label, pafs, segmentation, heatmap, sample_id, sample_name, forest_metadata = unpacked
+        nodes = sample[2]
         target_size = (int(segmentation.shape[-2]), int(segmentation.shape[-1]))
         prediction = predict_aux_maps(
             model,
@@ -733,7 +853,34 @@ def main() -> None:
                 targets=targets,
                 forest_metadata=forest_metadata,
             )
+        if "heatmap_native_logits" in prediction:
+            native_heatmap_available = True
+            for threshold in thresholds:
+                counts = peak_pr_counts(
+                    prediction,
+                    nodes,
+                    threshold=threshold,
+                    match_radius=float(args.peak_match_radius),
+                )
+                for key, value in counts.items():
+                    pr_counts[threshold][key] += value
         print(f"[{index + 1}/{limit}] saved: {panel_path}")
+
+    if native_heatmap_available:
+        # Store the sweep even when --save-json is off: it is a diagnostic
+        # artifact, not a visualization option.
+        (output_dir / "peak_pr_summary.json").write_text(
+            json.dumps(
+                {
+                    "thresholds": summarize_peak_pr(pr_counts),
+                    "match_radius_native": float(args.peak_match_radius),
+                    "gating": "predicted_segmentation",
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
 
 
 if __name__ == "__main__":

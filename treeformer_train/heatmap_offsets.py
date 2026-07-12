@@ -6,6 +6,52 @@ import torch
 import torch.nn.functional as F
 
 
+def make_native_center_targets(
+    nodes_by_image: Sequence[torch.Tensor],
+    *,
+    target_size: tuple[int, int],
+    device: torch.device,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Rasterize normalized node coordinates into unique native-grid centers.
+
+    The returned mask is the source of truth for center classification: it is
+    built directly from graph-node coordinates, never recovered from a blurred
+    Gaussian heatmap.  At a coarse grid multiple nodes can map to one cell; the
+    first node owns the positive cell and the remaining nodes are reported as
+    collisions so callers can log the information loss explicitly.
+
+    Returns ``(center_mask, node_counts, collision_counts)`` where the latter
+    two tensors are per-image counts.  ``center_mask`` is ``[N,1,H,W]``.
+    """
+
+    height, width = (int(target_size[0]), int(target_size[1]))
+    if height < 1 or width < 1:
+        raise ValueError(f"target_size must be positive, got {target_size}")
+
+    batch_size = len(nodes_by_image)
+    centers = torch.zeros((batch_size, 1, height, width), device=device, dtype=torch.bool)
+    node_counts = torch.zeros((batch_size,), device=device, dtype=torch.long)
+    collision_counts = torch.zeros((batch_size,), device=device, dtype=torch.long)
+    for batch_index, raw_nodes in enumerate(nodes_by_image):
+        nodes = torch.as_tensor(raw_nodes, device=device, dtype=torch.float32)
+        if nodes.numel() == 0:
+            continue
+        if nodes.ndim != 2 or nodes.shape[1] != 2:
+            raise ValueError(f"nodes must be [N,2], got {tuple(nodes.shape)}")
+        node_counts[batch_index] = nodes.shape[0]
+        coordinates = nodes.clamp(0.0, 1.0)
+        x = coordinates[:, 0] * max(width - 1, 1)
+        y = coordinates[:, 1] * max(height - 1, 1)
+        columns = torch.floor(x + 0.5).long().clamp(0, width - 1)
+        rows = torch.floor(y + 0.5).long().clamp(0, height - 1)
+        for row, column in zip(rows.tolist(), columns.tolist(), strict=True):
+            if centers[batch_index, 0, row, column]:
+                collision_counts[batch_index] += 1
+            else:
+                centers[batch_index, 0, row, column] = True
+    return centers, node_counts, collision_counts
+
+
 def make_native_offset_targets(
     nodes_by_image: Sequence[torch.Tensor],
     *,

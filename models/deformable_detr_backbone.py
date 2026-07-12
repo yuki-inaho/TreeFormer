@@ -10,7 +10,6 @@
 """
 Backbone modules.
 """
-from collections import OrderedDict
 
 import torch
 import torch.nn.functional as F
@@ -39,15 +38,16 @@ class FrozenBatchNorm2d(torch.nn.Module):
         self.register_buffer("running_var", torch.ones(n))
         self.eps = eps
 
-    def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict,
-                              missing_keys, unexpected_keys, error_msgs):
-        num_batches_tracked_key = prefix + 'num_batches_tracked'
+    def _load_from_state_dict(
+        self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs
+    ):
+        num_batches_tracked_key = prefix + "num_batches_tracked"
         if num_batches_tracked_key in state_dict:
             del state_dict[num_batches_tracked_key]
 
         super(FrozenBatchNorm2d, self)._load_from_state_dict(
-            state_dict, prefix, local_metadata, strict,
-            missing_keys, unexpected_keys, error_msgs)
+            state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs
+        )
 
     def forward(self, x):
         # move reshapes to the beginning
@@ -63,19 +63,23 @@ class FrozenBatchNorm2d(torch.nn.Module):
 
 
 class BackboneBase(nn.Module):
-
     def __init__(self, backbone: nn.Module, train_backbone: bool, return_interm_layers: bool):
         super().__init__()
         for name, parameter in backbone.named_parameters():
-            if not train_backbone or 'layer2' not in name and 'layer3' not in name and 'layer4' not in name:
+            if not train_backbone or "layer2" not in name and "layer3" not in name and "layer4" not in name:
                 parameter.requires_grad_(False)
+        # Keep the graph-transformer feature contract unchanged (layer2--4),
+        # while exposing layer1 as an aux-only stride-4 feature.  Dense node
+        # localization needs real high-resolution evidence; merely upsampling
+        # the graph's stride-8 tensor cannot recover it.
+        self.aux_stride = 4
+        self.aux_num_channels = 256
         if return_interm_layers:
-            # return_layers = {"layer1": "0", "layer2": "1", "layer3": "2", "layer4": "3"}
-            return_layers = {"layer2": "0", "layer3": "1", "layer4": "2"}
+            return_layers = {"layer1": "aux", "layer2": "0", "layer3": "1", "layer4": "2"}
             self.strides = [8, 16, 32]
             self.num_channels = [512, 1024, 2048]
         else:
-            return_layers = {'layer4': "0"}
+            return_layers = {"layer1": "aux", "layer4": "0"}
             self.strides = [32]
             self.num_channels = [2048]
         self.body = IntermediateLayerGetter(backbone, return_layers=return_layers)
@@ -93,15 +97,13 @@ class BackboneBase(nn.Module):
 
 class Backbone(BackboneBase):
     """ResNet backbone with frozen BatchNorm."""
-    def __init__(self, name: str,
-                 train_backbone: bool,
-                 return_interm_layers: bool,
-                 dilation: bool):
+
+    def __init__(self, name: str, train_backbone: bool, return_interm_layers: bool, dilation: bool):
         norm_layer = FrozenBatchNorm2d
         backbone = getattr(torchvision.models, name)(
-            replace_stride_with_dilation=[False, False, dilation],
-            pretrained=is_main_process(), norm_layer=norm_layer)
-        assert name not in ('resnet18', 'resnet34'), "number of channels are hard coded"
+            replace_stride_with_dilation=[False, False, dilation], pretrained=is_main_process(), norm_layer=norm_layer
+        )
+        assert name not in ("resnet18", "resnet34"), "number of channels are hard coded"
         super().__init__(backbone, train_backbone, return_interm_layers)
         if dilation:
             self.strides[-1] = self.strides[-1] // 2
@@ -112,19 +114,25 @@ class Joiner(nn.Sequential):
         super().__init__(backbone, position_embedding)
         self.strides = backbone.strides
         self.num_channels = backbone.num_channels
+        self.aux_stride = backbone.aux_stride
+        self.aux_num_channels = backbone.aux_num_channels
 
     def forward(self, tensor_list: NestedTensor):
         xs = self[0](tensor_list)
         out: List[NestedTensor] = []
         pos = []
+        aux_feature = None
         for name, x in sorted(xs.items()):
-            out.append(x)
+            if name == "aux":
+                aux_feature = x
+            else:
+                out.append(x)
 
         # position encoding
         for x in out:
             pos.append(self[1](x).to(x.tensors.dtype))
 
-        return out, pos
+        return out, pos, aux_feature
 
 
 def build_backbone(config):
@@ -132,8 +140,7 @@ def build_backbone(config):
     train_backbone = float(config.MODEL.ENCODER.LR_BACKBONE) > 0
     return_interm_layers = config.MODEL.ENCODER.MASKS or (config.MODEL.ENCODER.NUM_FEATURE_LEVELS > 1)
     backbone = Backbone(
-        config.MODEL.ENCODER.BACKBONE, train_backbone, return_interm_layers, 
-        config.MODEL.ENCODER.DILATION
+        config.MODEL.ENCODER.BACKBONE, train_backbone, return_interm_layers, config.MODEL.ENCODER.DILATION
     )
     model = Joiner(backbone, position_embedding)
     return model

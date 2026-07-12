@@ -12,7 +12,11 @@ from treeformer_train.aux_training import (
     compute_aux_eval_metrics,
     compute_aux_losses,
 )
-from treeformer_train.heatmap_offsets import decode_native_heatmap_peaks, make_native_offset_targets
+from treeformer_train.heatmap_offsets import (
+    decode_native_heatmap_peaks,
+    make_native_center_targets,
+    make_native_offset_targets,
+)
 
 
 class Config:
@@ -90,6 +94,7 @@ def test_compute_aux_losses_backpropagates_with_resized_maps():
         "heatmap_coord_var",
         "heatmap_peak",
         "heatmap_offset",
+        "heatmap_rank",
         "paf_total",
         "paf_l1",
         "paf_angular",
@@ -391,7 +396,7 @@ def test_aux_loss_requires_detail_target_when_fifth_channel_active_and_not_provi
 
 def test_native_heatmap_logits_are_used_for_stride_target_supervision():
     targets = _targets(batch_size=1, height=8, width=12)
-    targets["heatmap"] = torch.zeros(1, 1, 2, 3)
+    targets["heatmap"] = torch.zeros(1, 1, 4, 6)
     targets["heatmap"][:, :, 1, 1] = 1.0
     aux_maps = torch.zeros(1, 4, 8, 12, requires_grad=True)
     native_logits = torch.zeros(1, 1, 2, 3, requires_grad=True)
@@ -464,8 +469,8 @@ def test_native_offset_loss_uses_node_coordinates_without_changing_collate_targe
     targets["heatmap"] = torch.zeros(1, 1, 2, 3)
     targets["nodes"] = [torch.tensor([[0.5, 0.5]], dtype=torch.float32)]
     aux_maps = torch.zeros(1, 4, 8, 12, requires_grad=True)
-    native_logits = torch.zeros(1, 1, 2, 3, requires_grad=True)
-    offset_logits = torch.zeros(1, 2, 2, 3, requires_grad=True)
+    native_logits = torch.zeros(1, 1, 4, 6, requires_grad=True)
+    offset_logits = torch.zeros(1, 2, 4, 6, requires_grad=True)
     weights = AuxLossWeights(
         segmentation=0.0,
         heatmap=1.0,
@@ -490,6 +495,60 @@ def test_native_offset_loss_uses_node_coordinates_without_changing_collate_targe
     assert losses["heatmap_offset"].item() > 0.0
     assert offset_logits.grad is not None
     assert torch.count_nonzero(offset_logits.grad) > 0
+
+
+def test_native_center_targets_report_collisions_without_dropping_the_owner_cell():
+    centers, node_counts, collisions = make_native_center_targets(
+        [torch.tensor([[0.50, 0.50], [0.55, 0.50], [0.0, 0.0]], dtype=torch.float32)],
+        target_size=(2, 3),
+        device=torch.device("cpu"),
+    )
+
+    assert node_counts.tolist() == [3]
+    assert collisions.tolist() == [1]
+    assert centers.sum().item() == 2
+    assert centers[0, 0, 1, 1]
+
+
+def test_node_center_focal_offset_and_structured_ranking_use_raw_nodes():
+    targets = _targets(batch_size=1, height=8, width=12)
+    targets["heatmap"] = torch.zeros(1, 1, 4, 6)
+    # Two graph nodes collide in the same native cell.  The loss keeps one
+    # center positive and records the collision instead of deriving positives
+    # from a Gaussian target threshold.
+    targets["nodes"] = [torch.tensor([[0.50, 0.50], [0.55, 0.50], [0.0, 0.0]], dtype=torch.float32)]
+    aux_maps = torch.zeros(1, 4, 8, 12, requires_grad=True)
+    native_logits = torch.zeros(1, 1, 4, 6, requires_grad=True)
+    offset_logits = torch.zeros(1, 2, 4, 6, requires_grad=True)
+    weights = AuxLossWeights(
+        segmentation=0.0,
+        heatmap=1.0,
+        heatmap_mse=0.0,
+        heatmap_focal=1.0,
+        heatmap_focal_pos_source="node_centers",
+        heatmap_ridge=0.0,
+        heatmap_offset=1.0,
+        heatmap_rank=0.5,
+        heatmap_rank_topk=4,
+        paf=0.0,
+    )
+
+    losses = compute_aux_losses(
+        {
+            "aux_maps": aux_maps,
+            "aux_heatmap_native": native_logits,
+            "aux_heatmap_offset_native": offset_logits,
+        },
+        targets,
+        weights,
+    )
+    losses["total"].backward()
+
+    assert losses["heatmap_focal"].item() > 0.0
+    assert losses["heatmap_rank"].item() > 0.0
+    assert abs(losses["heatmap_center_collision_rate"].item() - 1.0 / 3.0) < 1e-6
+    assert native_logits.grad is not None and torch.count_nonzero(native_logits.grad) > 0
+    assert offset_logits.grad is not None and torch.count_nonzero(offset_logits.grad) > 0
 
 
 def test_compute_aux_eval_metrics_returns_only_scalar_tensors():
@@ -615,21 +674,15 @@ def test_focal_target_peaks_source_supervises_offgrid_nodes():
     # Without a positive_mask, target < pos_threshold everywhere so both pixels
     # fall on the negative branch, whose weight (1 - target)^beta vanishes near
     # the peak -- confident vs unconfident predictions there barely move the loss.
-    loss_confident_no_mask = centernet_heatmap_focal_loss_with_logits(
-        confident, target, pos_threshold=0.99
-    )
-    loss_unconfident_no_mask = centernet_heatmap_focal_loss_with_logits(
-        unconfident, target, pos_threshold=0.99
-    )
+    loss_confident_no_mask = centernet_heatmap_focal_loss_with_logits(confident, target, pos_threshold=0.99)
+    loss_unconfident_no_mask = centernet_heatmap_focal_loss_with_logits(unconfident, target, pos_threshold=0.99)
     assert abs(loss_confident_no_mask.item() - loss_unconfident_no_mask.item()) < 1e-4
 
     peaks = _extract_target_peak_indices(target, min_target=0.5)
     positive_mask = torch.zeros_like(target, dtype=torch.bool)
     positive_mask[peaks[:, 0], 0, peaks[:, 1], peaks[:, 2]] = True
 
-    loss_confident_with_mask = centernet_heatmap_focal_loss_with_logits(
-        confident, target, positive_mask=positive_mask
-    )
+    loss_confident_with_mask = centernet_heatmap_focal_loss_with_logits(confident, target, positive_mask=positive_mask)
     loss_unconfident_with_mask = centernet_heatmap_focal_loss_with_logits(
         unconfident, target, positive_mask=positive_mask
     )
@@ -813,7 +866,9 @@ def test_compute_aux_eval_metrics_reports_peak_detection_quality():
         "paf": torch.zeros(1, 2, 32, 32),
         "paf_mask": torch.zeros(1, 1, 32, 32, dtype=torch.bool),
     }
-    weights = AuxLossWeights(heatmap_peak_min_target=0.5, heatmap_eval_peak_threshold=0.5, heatmap_eval_match_radius=6.0)
+    weights = AuxLossWeights(
+        heatmap_peak_min_target=0.5, heatmap_eval_peak_threshold=0.5, heatmap_eval_match_radius=6.0
+    )
 
     metrics = compute_aux_eval_metrics({"aux_maps": aux_maps}, targets, weights)
 

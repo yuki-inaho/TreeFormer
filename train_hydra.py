@@ -199,6 +199,12 @@ def _train_only_metrics(
                 "train/aux_heatmap_offset_loss": train_metrics["heatmap_offset"]
                 if mode == "aux"
                 else train_metrics["aux_heatmap_offset"],
+                "train/aux_heatmap_rank_loss": train_metrics.get("heatmap_rank", 0.0)
+                if mode == "aux"
+                else train_metrics.get("aux_heatmap_rank", 0.0),
+                "train/heatmap_center_collision_rate": train_metrics.get("heatmap_center_collision_rate", 0.0)
+                if mode == "aux"
+                else train_metrics.get("aux_heatmap_center_collision_rate", 0.0),
                 "train/aux_paf_total_loss": train_metrics["paf_total"]
                 if mode == "aux"
                 else train_metrics["aux_paf_total"],
@@ -328,6 +334,8 @@ def _aux_metrics_dict(
         "train/aux_heatmap_coord_var_loss": train_metrics["heatmap_coord_var"],
         "train/aux_heatmap_peak_loss": train_metrics["heatmap_peak"],
         "train/aux_heatmap_offset_loss": train_metrics["heatmap_offset"],
+        "train/aux_heatmap_rank_loss": train_metrics.get("heatmap_rank", 0.0),
+        "train/heatmap_center_collision_rate": train_metrics.get("heatmap_center_collision_rate", 0.0),
         "train/aux_paf_total_loss": train_metrics["paf_total"],
         "train/aux_paf_angular": train_metrics["paf_angular"],
         "val/aux_total_loss": val_metrics["total"],
@@ -347,7 +355,10 @@ def _aux_metrics_dict(
         "val/aux_heatmap_coord_var_loss": val_metrics["heatmap_coord_var"],
         "val/aux_heatmap_peak_loss": val_metrics["heatmap_peak"],
         "val/aux_heatmap_offset_loss": val_metrics["heatmap_offset"],
+        "val/aux_heatmap_rank_loss": val_metrics.get("heatmap_rank", 0.0),
         "val/heatmap_offset_mae": val_metrics["heatmap_offset_mae"],
+        "val/heatmap_center_count": val_metrics.get("heatmap_center_count", 0.0),
+        "val/heatmap_center_collision_rate": val_metrics.get("heatmap_center_collision_rate", 0.0),
         "val/aux_paf_angular": val_metrics["paf_angular"],
         "val/heatmap_node_recall": val_metrics["heatmap_node_recall"],
         "val/heatmap_node_precision": val_metrics["heatmap_node_precision"],
@@ -407,6 +418,7 @@ def _joint_metrics_dict(
         "train/aux_heatmap_coord_var_loss": train_metrics["aux_heatmap_coord_var"],
         "train/aux_heatmap_peak_loss": train_metrics["aux_heatmap_peak"],
         "train/aux_heatmap_offset_loss": train_metrics["aux_heatmap_offset"],
+        "train/aux_heatmap_rank_loss": train_metrics.get("aux_heatmap_rank", 0.0),
         "train/aux_paf_total_loss": train_metrics["aux_paf_total"],
         "train/aux_paf_angular": train_metrics["aux_paf_angular"],
         "val/smd": val_smd,
@@ -426,7 +438,10 @@ def _joint_metrics_dict(
         "val/aux_heatmap_coord_var_loss": val_aux_metrics["heatmap_coord_var"],
         "val/aux_heatmap_peak_loss": val_aux_metrics["heatmap_peak"],
         "val/aux_heatmap_offset_loss": val_aux_metrics["heatmap_offset"],
+        "val/aux_heatmap_rank_loss": val_aux_metrics.get("heatmap_rank", 0.0),
         "val/heatmap_offset_mae": val_aux_metrics["heatmap_offset_mae"],
+        "val/heatmap_center_count": val_aux_metrics.get("heatmap_center_count", 0.0),
+        "val/heatmap_center_collision_rate": val_aux_metrics.get("heatmap_center_collision_rate", 0.0),
         "val/aux_paf_angular": val_aux_metrics["paf_angular"],
         "val/heatmap_node_recall": val_aux_metrics["heatmap_node_recall"],
         "val/heatmap_node_precision": val_aux_metrics["heatmap_node_precision"],

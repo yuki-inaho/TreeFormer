@@ -216,7 +216,7 @@ Decision rule:
 
 - Prefer the run with the best combination of high `val/heatmap_peak_contrast`, low `val/masked_heatmap_mae`, stable or improved `val/seg_iou` / `val/seg_dice_score`, and non-regressed `val/paf_masked_l1`.
 - Do not choose a run solely because `val/aux_total_loss` is lower; focal/ridge loss changes the numeric scale.
-- If all heatmap ablations remain ridge-like, next experiments should be local soft-argmax / peakness loss or query-level supervision, not semseg-feature concatenation.
+- If all loss-only heatmap ablations remain ridge-like, move to the node-center/offset/ranking profile below before trying query-level supervision. Do not add more coefficients to local soft-argmax, variance, or peakness terms.
 
 ## Joint Virtual-Root Graph + Aux Tuning
 
@@ -466,7 +466,7 @@ just cfg-private-curriculum-stage1
 | `ema` | `disabled`, `default` | EMA update/evaluation behavior |
 | `checkpoint` | `default` | last/best/periodic checkpoint policy |
 | `distributed` | `single`, `ddp` | Single-process or torchrun/DDP execution |
-| `ablation` | `heatmap_mse_baseline`, `heatmap_sigma1_5_mse`, `heatmap_focal`, `heatmap_focal_ridge`, `heatmap_focal_ridge_seg_low`, `heatmap_native_stride4`, `heatmap_native_stride4_offset` | Opt-in dense aux ablation overrides, applied as `+ablation=<name>` |
+| `ablation` | `heatmap_mse_baseline`, `heatmap_sigma1_5_mse`, `heatmap_focal`, `heatmap_focal_ridge`, `heatmap_focal_ridge_seg_low`, `heatmap_native_stride4`, `heatmap_native_stride4_offset`, `heatmap_center_offset_rank` | Opt-in dense aux ablation overrides, applied as `+ablation=<name>` |
 
 The `data` group lives in `conf/data/` and is required by `conf/config.yaml` defaults. It is tracked in Git; a checkout missing it cannot compose any Hydra config.
 
@@ -568,6 +568,29 @@ The offset profile reuses the same stride-4 cache because offsets are derived fr
 export TREEFORMER_ABLATION=heatmap_native_stride4_offset
 export TREEFORMER_SEG_CACHE_ROOT=${TREEFORMER_NATIVE_HEATMAP_CACHE_ROOT:-${TREEFORMER_ASSETS_ROOT:-../TreeFormer_assets}/cache/fast_seg/native_heatmap_stride4_v4}
 just train-private-seg-heatmap-paf-ablation
+```
+
+### Node-center + offset + structured-ranking diagnostic
+
+`+ablation=heatmap_center_offset_rank` is the recommended next diagnostic when the native Gaussian profile still renders broad ridges.  It changes the supervision contract rather than tuning another Gaussian loss coefficient:
+
+- `models/deformable_detr_backbone.py` exposes ResNet `layer1` as an aux-only stride-4 feature.  The graph transformer continues to consume its original stride-8/16/32 levels.
+- `AuxMapHead` fuses this actual stride-4 feature with the upsampled stride-8 decoder feature before its dedicated segmentation/direction towers and direct heatmap/offset projections.
+- Positive focal cells come directly from graph-node coordinates (`AUX_HEATMAP_FOCAL_POS_SOURCE=node_centers`), and `val/heatmap_center_collision_rate` records nodes that collide in one native cell.
+- Gaussian targets remain available only for negative weighting.  The profile disables MSE, ridge, local DSNT, variance, peakness, segmentation, and PAF terms so center focal + offset + ranking can be diagnosed in isolation.
+- The ranking term removes every cell near any GT node from its negative set, then compares positives against normalized top-M hard foreground negatives with a distance-augmented margin.
+
+The inference panel now shows native absolute probabilities separately from the segmentation-masked map; it no longer min-max normalizes diagnostic heatmaps.  `infer_aux_panel_treeformer.py` also writes `peak_pr_summary.json` for the requested native NMS threshold sweep.
+
+Use this profile with a fresh stride-4 target cache and a checkpoint-free short run first:
+
+```bash
+PYTHONPATH=. .venv/bin/python train_hydra.py \
+  train=seg_heatmap_paf +ablation=heatmap_center_offset_rank \
+  DATA.DATASET=treeformer-2D DATA.DATA_PATH="$TREEFORMER_PRIVATE_DATA" \
+  DATA.BATCH_SIZE=1 DATA.MAX_SIZE=128 DATA.NUM_WORKERS=0 \
+  DATA.TRAIN_LIMIT=2 DATA.VAL_LIMIT=2 TRAIN.EPOCHS=1 \
+  checkpoint.enabled=false logging=disabled
 ```
 
 ## Runtime GPU Speedups

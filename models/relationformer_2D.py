@@ -36,17 +36,23 @@ def _conv_norm_relu(in_channels, out_channels):
 
 
 class AuxMapHead(nn.Module):
-    """Stride-4 dense decoder with a direct native-grid node heatmap head.
+    """Stride-4 dense decoder with real high-resolution FPN fusion.
 
-    ``feature`` is the first TreeFormer feature level (stride 8).  The low
-    resolution encoder refinement is kept separate because graph conditioning
-    consumes it at stride 8.  The dense decoder then upsamples it to stride 4.
-    Heatmap logits branch directly from that decoder feature through a 1x1
-    projection; segmentation and direction are allowed their own lightweight
-    output towers.
+    ``feature`` is the first graph feature level (stride 8).  When the ResNet
+    backbone supplies ``high_resolution_feature`` from layer1, the aux decoder
+    fuses it at stride 4 before producing dense maps.  This keeps graph inputs
+    and graph conditioning at stride 8 while allowing the heatmap branch to use
+    genuine stride-4 visual evidence.
     """
 
-    def __init__(self, in_channels, hidden_channels, out_channels, decoder_stride=4):
+    def __init__(
+        self,
+        in_channels,
+        hidden_channels,
+        out_channels,
+        decoder_stride=4,
+        high_resolution_in_channels=None,
+    ):
         super().__init__()
         hidden_channels = int(hidden_channels)
         out_channels = int(out_channels)
@@ -59,9 +65,20 @@ class AuxMapHead(nn.Module):
             raise ValueError(f"aux head decoder_stride must be 4 or 8, got {decoder_stride}")
 
         self.decoder_stride = decoder_stride
+        self.high_resolution_in_channels = (
+            int(high_resolution_in_channels) if high_resolution_in_channels is not None else None
+        )
         self.low_resolution_encoder = nn.Sequential(
             _conv_norm_relu(in_channels, hidden_channels),
             _conv_norm_relu(hidden_channels, hidden_channels),
+        )
+        self.high_resolution_encoder = (
+            _conv_norm_relu(self.high_resolution_in_channels, hidden_channels)
+            if self.high_resolution_in_channels is not None
+            else None
+        )
+        self.fusion_refine = (
+            _conv_norm_relu(hidden_channels * 2, hidden_channels) if self.high_resolution_encoder is not None else None
         )
         self.decoder_refine = _conv_norm_relu(hidden_channels, hidden_channels)
         self.segmentation_tower = _conv_norm_relu(hidden_channels, hidden_channels)
@@ -75,15 +92,26 @@ class AuxMapHead(nn.Module):
         self.direction_head = nn.Conv2d(hidden_channels, 2, kernel_size=1)
         self.detail_head = nn.Conv2d(hidden_channels, 1, kernel_size=1) if out_channels == 5 else None
 
-    def forward(self, feature, output_size):
-        _low_feature, logits, _heatmap_native, _offset_native = self.forward_with_features(feature, output_size)
+    def forward(self, feature, output_size, high_resolution_feature=None):
+        _low_feature, logits, _heatmap_native, _offset_native = self.forward_with_features(
+            feature, output_size, high_resolution_feature=high_resolution_feature
+        )
         return logits
 
-    def forward_with_features(self, feature, output_size):
+    def forward_with_features(self, feature, output_size, high_resolution_feature=None):
         low_feature = self.low_resolution_encoder(feature)
         decoder_feature = low_feature
         if self.decoder_stride == 4:
             decoder_feature = F.interpolate(decoder_feature, scale_factor=2.0, mode="bilinear", align_corners=False)
+            if high_resolution_feature is not None:
+                if self.high_resolution_encoder is None or self.fusion_refine is None:
+                    raise ValueError("received a stride-4 aux feature but this aux head was not configured for fusion")
+                high_feature = self.high_resolution_encoder(high_resolution_feature)
+                if high_feature.shape[-2:] != decoder_feature.shape[-2:]:
+                    high_feature = F.interpolate(
+                        high_feature, size=decoder_feature.shape[-2:], mode="bilinear", align_corners=False
+                    )
+                decoder_feature = self.fusion_refine(torch.cat((decoder_feature, high_feature), dim=1))
         decoder_feature = self.decoder_refine(decoder_feature)
 
         segmentation_logits = self.segmentation_head(self.segmentation_tower(decoder_feature))
@@ -191,9 +219,9 @@ class RelationFormer(nn.Module):
         self.aux_graph_conditioning = None
         self.aux_graph_conditioning_mode = "none"
         if aux_head_config is not None and bool(_get_attr(aux_head_config, "ENABLED", False)):
-            self.aux_graph_conditioning_mode = str(
-                _get_attr(aux_head_config, "GRAPH_CONDITIONING", "none")
-            ).lower().replace("-", "_")
+            self.aux_graph_conditioning_mode = (
+                str(_get_attr(aux_head_config, "GRAPH_CONDITIONING", "none")).lower().replace("-", "_")
+            )
             if self.aux_graph_conditioning_mode not in {"none", "aux_feature"}:
                 raise ValueError(
                     "MODEL.AUX_HEAD.GRAPH_CONDITIONING must be one of ['none', 'aux_feature'], "
@@ -205,6 +233,7 @@ class RelationFormer(nn.Module):
                 hidden_channels=aux_hidden_dim,
                 out_channels=_get_attr(aux_head_config, "OUT_CHANNELS", 4),
                 decoder_stride=_get_attr(aux_head_config, "DECODER_STRIDE", 4),
+                high_resolution_in_channels=getattr(self.encoder, "aux_num_channels", None),
             )
             if self.aux_graph_conditioning_mode == "aux_feature":
                 conditioning_groups = min(32, self.hidden_dim)
@@ -227,7 +256,15 @@ class RelationFormer(nn.Module):
         # 2*3*64*64  # 不需要变成三倍
 
         # Deformable Transformer backbone
-        features, pos = self.encoder(samples)
+        encoder_result = self.encoder(samples)
+        if len(encoder_result) == 3:
+            features, pos, aux_backbone_feature = encoder_result
+        else:
+            # Lightweight test/dummy encoders preserve the former two-value
+            # contract.  They exercise the stride-8 fallback, while the real
+            # ResNet Joiner provides an aux-only layer1 feature.
+            features, pos = encoder_result
+            aux_backbone_feature = None
         # print(len(features))
         # 3
         # print(len(pos))
@@ -279,16 +316,23 @@ class RelationFormer(nn.Module):
 
         out = {}
         if self.aux_head is not None:
+            aux_backbone_tensor = None
+            if aux_backbone_feature is not None:
+                # Real backbones return NestedTensor.tensors.  The lightweight
+                # test adapter exposes the same payload as ``tensor``.
+                aux_backbone_tensor = getattr(aux_backbone_feature, "tensors", None)
+                if aux_backbone_tensor is None:
+                    aux_backbone_tensor = getattr(aux_backbone_feature, "tensor", None)
             if self.aux_graph_conditioning is None:
                 _aux_feature, aux_maps, heatmap_native, heatmap_offset_native = self.aux_head.forward_with_features(
-                    srcs[0], samples.tensors.shape[-2:]
+                    srcs[0], samples.tensors.shape[-2:], high_resolution_feature=aux_backbone_tensor
                 )
                 out["aux_maps"] = aux_maps
                 out["aux_heatmap_native"] = heatmap_native
                 out["aux_heatmap_offset_native"] = heatmap_offset_native
             else:
                 aux_feature, aux_maps, heatmap_native, heatmap_offset_native = self.aux_head.forward_with_features(
-                    srcs[0], samples.tensors.shape[-2:]
+                    srcs[0], samples.tensors.shape[-2:], high_resolution_feature=aux_backbone_tensor
                 )
                 out["aux_maps"] = aux_maps
                 out["aux_heatmap_native"] = heatmap_native

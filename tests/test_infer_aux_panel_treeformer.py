@@ -16,8 +16,10 @@ from infer_aux_panel_treeformer import (
     mask_scalar_map_by_segmentation,
     paf_to_rgb,
     overlay_node_peaks,
+    peak_pr_counts,
     predict_aux_maps,
     resize_scalar_map,
+    summarize_peak_pr,
     unpack_aux_panel_sample,
     write_aux_summary_json,
 )
@@ -70,6 +72,16 @@ def test_heatmap_visualization_is_black_outside_visible_mask():
     assert np.any(image[3, 4] != 0)
 
 
+def test_heatmap_visualization_keeps_absolute_probability_scale_by_default():
+    uniform = torch.full((4, 4), 0.5)
+
+    absolute = np.asarray(heatmap_to_pil(uniform))
+    normalized = np.asarray(heatmap_to_pil(uniform, normalize=True))
+
+    assert np.any(absolute != 0)
+    assert not np.array_equal(absolute, normalized)
+
+
 def test_aux_visualization_helpers_mask_maps_by_segmentation_confidence():
     heatmap = torch.ones(8, 10)
     paf = torch.ones(2, 8, 10)
@@ -110,6 +122,28 @@ def test_native_nms_nodes_use_predicted_segmentation_without_gt_input():
     # heatmap peak is rejected exclusively by the model's own segmentation.
     assert prediction["node_peaks"].shape == (1, 3)
     assert torch.allclose(prediction["node_peaks"][0, :2], torch.tensor([0.0, 0.0]))
+
+
+def test_native_peak_pr_sweep_uses_raw_node_centers_and_predicted_segmentation():
+    logits = torch.full((4, 6), -10.0)
+    logits[2, 3] = 10.0
+    prediction = {
+        "heatmap_native_logits": logits,
+        "heatmap_offset_native": torch.zeros(2, 4, 6),
+        "segmentation": torch.ones(8, 12),
+    }
+
+    counts = peak_pr_counts(
+        prediction,
+        torch.tensor([[0.60, 0.50]], dtype=torch.float32),
+        threshold=0.5,
+        match_radius=1.0,
+    )
+    summary = summarize_peak_pr({0.5: counts})
+
+    assert counts == {"tp": 1, "fp": 0, "fn": 0}
+    assert summary["0.5000"]["precision"] == 1.0
+    assert summary["0.5000"]["recall"] == 1.0
 
 
 def test_make_aux_panel_and_summary_json(tmp_path: Path):

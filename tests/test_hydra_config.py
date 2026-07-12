@@ -162,9 +162,7 @@ def test_logged_best_metric_reflects_the_checkpoint_just_written():
     first_validation = _apply_checkpoint_best_metric({}, _FakeCheckpointResult(0.0364, 10))
     assert first_validation["checkpoint/best_metric"] == 0.0364
 
-    later = _apply_checkpoint_best_metric(
-        {"checkpoint/best_metric": 0.0364}, _FakeCheckpointResult(0.0212, 20)
-    )
+    later = _apply_checkpoint_best_metric({"checkpoint/best_metric": 0.0364}, _FakeCheckpointResult(0.0212, 20))
     assert later["checkpoint/best_metric"] == 0.0212
 
 
@@ -221,6 +219,21 @@ def test_native_stride4_offset_ablation_composes_explicit_offset_contract():
 
     assert cfg.DATA.AUX_HEATMAP_TARGET_STRIDE == 4
     assert cfg.TRAIN.W_AUX_HEATMAP_OFFSET == 1.0
+
+
+def test_center_offset_rank_ablation_composes_node_supervision_contract():
+    with initialize_config_dir(version_base="1.3", config_dir=str(CONF_DIR)):
+        cfg = compose(
+            config_name="config",
+            overrides=["train=seg_heatmap_paf", "+ablation=heatmap_center_offset_rank"],
+        )
+
+    assert cfg.DATA.AUX_HEATMAP_TARGET_STRIDE == 4
+    assert cfg.TRAIN.AUX_HEATMAP_FOCAL_POS_SOURCE == "node_centers"
+    assert cfg.TRAIN.W_AUX_HEATMAP_OFFSET == 1.0
+    assert cfg.TRAIN.W_AUX_HEATMAP_RANK > 0.0
+    assert cfg.TRAIN.W_AUX_HEATMAP_COORD == 0.0
+    assert cfg.TRAIN.W_AUX_HEATMAP_PEAK == 0.0
 
 
 def test_hydra_muon_schedulefree_override_is_explicit():
