@@ -1777,3 +1777,4 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser('test Relationformer', parents=[get_args_parser(is_test_use_mst=is_test_use_mst)])
     args = parser.parse_args()
     test(is_use_mst=is_test_use_mst, args=args)
+

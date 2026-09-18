@@ -68,10 +68,10 @@ The config file can be found at `.configs/tree_2D_use_mst_only1.yaml` and `.conf
 For example, the command for training Relationformer is following:
 
 ```bash
-python -m torch.distributed.launch --nproc_per_node=8 train.py --config configs/tree_2D_use_mst_only1.yaml --cuda_visible_device 0 1 2 3 4 5 6 7 
+python -m torch.distributed.launch --nproc_per_node=8 train_unmst.py --config configs/tree_2D_use_mst_only1.yaml --cuda_visible_device 0 1 2 3 4 5 6 7 
 ```
 ```bash
-python -m torch.distributed.launch --nproc_per_node=8 train.py --config configs/tree_2D_use_mst_only1.yaml --cuda_visible_device 0 1 2 3 4 5 6 7 --resume trained_weights/check/checkpoint_81_epoch.pkl 
+python -m torch.distributed.launch --nproc_per_node=8 train_mst.py --config configs/tree_2D_use_mst_only1.yaml --cuda_visible_device 0 1 2 3 4 5 6 7 --resume trained_weights/check/checkpoint_81_epoch.pkl 
 ```
 
 ## 3. Evaluation
@@ -81,8 +81,11 @@ Once you have the config file and trained model, run following command to evalua
 ```bash
 python valid_smd_guyot_nx.py
 ```
+## 4. Pretrained Weights
 
-## 4. Citation
+Download pretrained model checkpoints from: [Google Drive](https://drive.google.com/drive/folders/1QFIwOAESSAF8Uc4it0-cAzBiMMszNJg2?usp=sharing)
+
+## 5. Citation
 
 ```
 @inproceedings{liu2025treeformer,
