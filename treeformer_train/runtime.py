@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import random
 from contextlib import nullcontext
 from dataclasses import dataclass
@@ -110,7 +111,10 @@ def setup_distributed(config: Any) -> DistributedContext:
     backend = getattr(config, "backend", "nccl") if not isinstance(config, dict) else config.get("backend", "nccl")
     if not dist.is_initialized():
         dist.init_process_group(backend=backend)
-    local_rank = int(torch.cuda.current_device()) if torch.cuda.is_available() else 0
+    if "LOCAL_RANK" in os.environ:
+        local_rank = int(os.environ["LOCAL_RANK"])
+    else:
+        local_rank = int(torch.cuda.current_device()) if torch.cuda.is_available() else 0
     return DistributedContext(
         mode="ddp",
         rank=dist.get_rank(),
